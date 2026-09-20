@@ -60,6 +60,27 @@
 </div>
 {{end}}
 
+{{define "themeToggle"}}
+<div class="dropdown theme-toggle">
+  <button class="btn btn-sm btn-icon" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+          aria-label="Colour theme" title="Colour theme">
+    <span class="material-symbols-outlined" data-theme-icon>light_mode</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><h6 class="dropdown-header">Theme</h6></li>
+    <li><button type="button" class="dropdown-item" data-theme-choice="light" role="menuitemradio" aria-checked="false">
+      <span class="material-symbols-outlined me-2">light_mode</span>Light
+      <span class="material-symbols-outlined check">check</span></button></li>
+    <li><button type="button" class="dropdown-item" data-theme-choice="dark" role="menuitemradio" aria-checked="false">
+      <span class="material-symbols-outlined me-2">dark_mode</span>Dark
+      <span class="material-symbols-outlined check">check</span></button></li>
+    <li><button type="button" class="dropdown-item" data-theme-choice="auto" role="menuitemradio" aria-checked="false">
+      <span class="material-symbols-outlined me-2">contrast</span>System
+      <span class="material-symbols-outlined check">check</span></button></li>
+  </ul>
+</div>
+{{end}}
+
 {{define "statCard"}}
 <div class="col-6 col-md-4 col-xl-2">
   <div class="stat-card">

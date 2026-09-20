@@ -54,6 +54,11 @@ html/template + Bootstrap 5 (Material styling) + Chart.js
    early-stop bounds on `UPDATED_AT DESC` connections.
 5. **No SPA.** Server-rendered `html/template` (contextual auto-escaping covers
    the "escape all GitHub-provided data" requirement) + Bootstrap 5 + Chart.js.
+   Light/dark theming rides on Bootstrap 5.3 colour modes: the custom `--md-*`
+   tokens are redefined under `:root[data-bs-theme="dark"]`, a tiny inline script
+   in `<head>` resolves the stored choice before the first paint, and Chart.js
+   charts are rebuilt from a small registry with a per-theme palette when the
+   mode changes.
 6. **Failure isolation.** A repository-level error is logged and recorded; the
    run continues and is marked `partial`. Sync runs in a goroutine and can never
    crash the HTTP server.

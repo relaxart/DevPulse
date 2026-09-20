@@ -219,3 +219,61 @@ func TestToJSONNeverClosesTheScriptElement(t *testing.T) {
 		t.Errorf("toJSON should escape angle brackets: %s", out)
 	}
 }
+
+func TestDarkThemeIsAppliedBeforeFirstPaint(t *testing.T) {
+	r := testRenderer(t)
+	w := httptest.NewRecorder()
+	if err := r.render(w, 200, "dashboard.html", dashboardView{layoutData: baseLayout()}); err != nil {
+		t.Fatal(err)
+	}
+	body := w.Body.String()
+
+	head := body
+	if idx := strings.Index(body, "</head>"); idx > 0 {
+		head = body[:idx]
+	}
+	// The theme must be resolved in <head>, before any markup renders, or every
+	// navigation flashes the light theme first.
+	if !strings.Contains(head, "devpulse-theme") {
+		t.Error("the theme bootstrap script is missing from <head>")
+	}
+	if !strings.Contains(head, "data-bs-theme") {
+		t.Error("the head script does not set data-bs-theme")
+	}
+	if !strings.Contains(head, "prefers-color-scheme: dark") {
+		t.Error("the head script does not fall back to the system preference")
+	}
+	if !strings.Contains(head, `<meta name="color-scheme" content="light dark">`) {
+		t.Error("the color-scheme meta tag is missing, so browser UI will not follow the theme")
+	}
+	// Without JavaScript the page must still be a valid, readable light page.
+	if !strings.Contains(body, `<html lang="en" data-bs-theme="light">`) {
+		t.Error("the markup should carry a light default for the no-JavaScript case")
+	}
+}
+
+func TestThemePickerOffersEveryMode(t *testing.T) {
+	r := testRenderer(t)
+	pages := map[string]any{
+		"dashboard.html":    dashboardView{layoutData: baseLayout()},
+		"contributors.html": contributorsView{layoutData: baseLayout(), Sort: metrics.ResolveSort("commits"), MetricGroup: metrics.MetricGroups(), Page: 1, PageSize: 50},
+		"status.html":       statusView{layoutData: baseLayout()},
+	}
+	for page, data := range pages {
+		t.Run(page, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			if err := r.render(w, 200, page, data); err != nil {
+				t.Fatal(err)
+			}
+			body := w.Body.String()
+			for _, mode := range []string{"light", "dark", "auto"} {
+				if !strings.Contains(body, `data-theme-choice="`+mode+`"`) {
+					t.Errorf("%s does not offer the %q theme", page, mode)
+				}
+			}
+			if !strings.Contains(body, "data-theme-icon") {
+				t.Errorf("%s has no theme indicator", page)
+			}
+		})
+	}
+}
