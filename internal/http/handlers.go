@@ -4,6 +4,7 @@ package http
 
 import (
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -190,7 +191,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	repos, err := s.db.RepositoryRanking(ctx, pc.Filter)
+	repos, err := s.db.RepositoryRanking(ctx, pc.Filter, metrics.DefaultRepositorySort, metrics.SortDesc)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -332,9 +333,28 @@ func (s *Server) handleContributor(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "contributor.html", view)
 }
 
+// sortHeader is one clickable column header of the repositories table.
+type sortHeader struct {
+	Label string
+	Title string
+	// Numeric headers are right-aligned, matching their cells.
+	Numeric bool
+	// Active marks the column the table is currently ordered by.
+	Active bool
+	// Ascending is meaningful only when Active is set.
+	Ascending bool
+	Href      template.URL
+	// AriaSort is the value of the th aria-sort attribute.
+	AriaSort string
+}
+
 type repositoriesView struct {
 	layoutData
 	Rows            []models.RepositoryStats
+	Headers         []sortHeader
+	SortKey         string
+	SortDir         string
+	SortLabel       string
 	IncludeArchived bool
 }
 
@@ -343,8 +363,22 @@ func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := repositoriesView{layoutData: pc.Layout, IncludeArchived: s.cfg.IncludeArchived}
+	q := r.URL.Query()
+	col, dir := metrics.ResolveRepositorySort(q.Get("sort"), q.Get("dir"))
+
+	view := repositoriesView{
+		layoutData:      pc.Layout,
+		IncludeArchived: s.cfg.IncludeArchived,
+		SortKey:         col.Key,
+		SortDir:         dir,
+		SortLabel:       col.Label,
+		Headers:         repositoryHeaders(pc.Layout.Range.Query(), col.Key, dir),
+	}
 	view.Title = "Repositories"
+	// Keep the chosen column in the period picker and the navigation links.
+	view.Query = cloneValues(pc.Layout.Range.Query())
+	view.Query.Set("sort", col.Key)
+	view.Query.Set("dir", dir)
 
 	if pc.Org == nil {
 		s.render(w, r, http.StatusOK, "repositories.html", view)
@@ -355,13 +389,47 @@ func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
 	// visible and clearly marked, even when excluded from analytics.
 	filter := pc.Filter
 	filter.IncludeArchived = true
-	rows, err := s.db.RepositoryRanking(r.Context(), filter)
+	rows, err := s.db.RepositoryRanking(r.Context(), filter, col.Key, dir)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	view.Rows = rows
 	s.render(w, r, http.StatusOK, "repositories.html", view)
+}
+
+// repositoryHeaders builds one header link per sortable column. Clicking the
+// active column flips its direction; clicking any other starts at that column's
+// natural direction.
+func repositoryHeaders(base url.Values, activeKey, activeDir string) []sortHeader {
+	cols := metrics.RepositoryColumns()
+	out := make([]sortHeader, 0, len(cols))
+	for _, c := range cols {
+		active := c.Key == activeKey
+		next := c.ToggleDirection(activeKey, activeDir)
+
+		v := cloneValues(base)
+		v.Set("sort", c.Key)
+		v.Set("dir", next)
+
+		aria := "none"
+		if active {
+			aria = "descending"
+			if activeDir == metrics.SortAsc {
+				aria = "ascending"
+			}
+		}
+		out = append(out, sortHeader{
+			Label:     c.Label,
+			Title:     c.Title,
+			Numeric:   c.Numeric,
+			Active:    active,
+			Ascending: active && activeDir == metrics.SortAsc,
+			Href:      template.URL("/repositories?" + v.Encode()),
+			AriaSort:  aria,
+		})
+	}
+	return out
 }
 
 type repositoryView struct {

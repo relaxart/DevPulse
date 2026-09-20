@@ -56,7 +56,8 @@ It provides:
 - **Contributor detail pages** — summary metrics, charts, repositories, pull
   requests and reviews.
 - **Repository list and detail pages** — contributors, commits, PRs, reviews,
-  last activity, archived status.
+  last activity, archived status. Every column header on the list sorts the
+  table; clicking the active column flips the direction.
 - **Status page** — sync health, GraphQL rate limit, stored row counts, run history.
 - **Global date filter** — 7 or 30 days, 3/6/12 months or a custom range, applied
   consistently across every page.

@@ -220,6 +220,9 @@ main { flex: 1 0 auto; }
 .table > thead th a:hover { color: var(--md-primary); }
 .table > thead th.sorted a { color: var(--md-primary); font-weight: 700; }
 .table > thead th.sorted::after { content: " ▼"; color: var(--md-primary); font-size: .6rem; }
+.table > thead th.sorted.asc::after { content: " ▲"; }
+.table > thead th.sortable a { display: inline-block; }
+.table > thead th.sortable:hover { background: var(--md-primary-softer); }
 .table > tbody td { border-color: var(--md-outline-soft); font-size: .9rem; }
 .ranking-table td, .ranking-table th { padding-left: .5rem; padding-right: .5rem; }
 .row-archived { opacity: .62; }
