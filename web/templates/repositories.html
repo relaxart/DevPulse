@@ -1,0 +1,63 @@
+{{define "content"}}
+{{$q := .Query}}
+
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="page-title mb-0">Repositories</h1>
+    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}}</p>
+  </div>
+  <div class="text-body-secondary small">
+    {{if .IncludeArchived}}
+      <span class="material-symbols-outlined align-middle">inventory_2</span>
+      <code>INCLUDE_ARCHIVED=true</code> — archived repositories count towards analytics.
+    {{else}}
+      <span class="material-symbols-outlined align-middle">inventory_2</span>
+      <code>INCLUDE_ARCHIVED=false</code> — archived repositories are stored and listed, but excluded from rankings and totals.
+    {{end}}
+  </div>
+</div>
+
+<div class="surface">
+  <div class="surface-body p-0 table-responsive">
+    {{if .Rows}}
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Repository</th>
+          <th class="text-end">Contributors</th>
+          <th class="text-end">Commits</th>
+          <th class="text-end">+/−</th>
+          <th class="text-end">PRs opened</th>
+          <th class="text-end">PRs merged</th>
+          <th class="text-end">Reviews</th>
+          <th class="text-end">Last activity</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Rows}}
+        <tr{{if .IsArchived}} class="row-archived"{{end}}>
+          <td>
+            <a class="repo-name text-decoration-none" href="{{link (printf "/repositories/%s" .Name) $q}}">{{.Name}}</a>
+            {{if .PrimaryLang}}<span class="badge rounded-pill text-bg-light ms-1">{{.PrimaryLang}}</span>{{end}}
+            {{if .Description}}<div class="repo-desc">{{.Description}}</div>{{end}}
+          </td>
+          <td class="text-end">{{num .Contributors}}</td>
+          <td class="text-end">{{num .Commits}}</td>
+          <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+          <td class="text-end">{{num .PRsOpened}}</td>
+          <td class="text-end">{{num .PRsMerged}}</td>
+          <td class="text-end">{{num .Reviews}}</td>
+          <td class="text-end text-body-secondary text-nowrap">{{datetime .LastActivity}}</td>
+          <td class="text-nowrap">
+            {{if .IsArchived}}<span class="badge text-bg-secondary">archived</span>{{else}}<span class="badge text-bg-success-subtle text-success-emphasis">active</span>{{end}}
+            {{if .IsPrivate}}<span class="badge text-bg-light ms-1" title="Private repository">private</span>{{end}}
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}{{template "emptyState" "No repositories have been synchronized yet."}}{{end}}
+  </div>
+</div>
+{{end}}

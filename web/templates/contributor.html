@@ -1,0 +1,140 @@
+{{define "content"}}
+{{$q := .Query}}
+{{$c := .Contributor}}
+
+<div class="profile-header surface mb-4">
+  <div class="surface-body d-flex flex-wrap align-items-center gap-3">
+    <span class="avatar avatar-lg">
+      {{if $c.AvatarURL}}<img src="{{$c.AvatarURL}}" alt="" width="72" height="72">
+      {{else}}<span class="avatar-initials">{{initials $c.DisplayName}}</span>{{end}}
+    </span>
+    <div class="flex-grow-1">
+      <h1 class="page-title mb-0">{{$c.DisplayName}}</h1>
+      <p class="page-subtitle mb-1">
+        <a href="{{$c.URL}}" rel="noopener noreferrer" target="_blank" class="text-decoration-none">@{{$c.Login}}</a>
+        {{if $c.IsBot}}<span class="badge text-bg-secondary ms-1">bot</span>{{end}}
+      </p>
+      <span class="text-body-secondary small">{{.Range.Label}} · {{.Range.FromString}} → {{.Range.ToString}} · {{.Org}}</span>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="{{link "/contributors" $q}}">← All contributors</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  {{template "statCard" dict "Label" "Commits" "Value" (num $c.Commits) "Icon" "commit"}}
+  {{template "statCard" dict "Label" "Additions" "Value" (compact $c.Additions) "Icon" "add" "Sub" "lines added"}}
+  {{template "statCard" dict "Label" "Deletions" "Value" (compact $c.Deletions) "Icon" "remove" "Sub" "lines deleted"}}
+  {{template "statCard" dict "Label" "Changed files" "Value" (num $c.ChangedFiles) "Icon" "description"}}
+  {{template "statCard" dict "Label" "PRs opened" "Value" (num $c.PRsOpened) "Icon" "call_split"}}
+  {{template "statCard" dict "Label" "PRs merged" "Value" (num $c.PRsMerged) "Icon" "merge"}}
+</div>
+<div class="row g-3 mb-4">
+  {{template "statCard" dict "Label" "Reviews submitted" "Value" (num $c.ReviewsSubmitted) "Icon" "rate_review"}}
+  {{template "statCard" dict "Label" "Approvals" "Value" (num $c.Approvals) "Icon" "check_circle"}}
+  {{template "statCard" dict "Label" "Changes requested" "Value" (num $c.ChangesRequested) "Icon" "edit_note"}}
+  {{template "statCard" dict "Label" "Unique PRs reviewed" "Value" (num $c.UniquePRsReviewed) "Icon" "fact_check"}}
+  {{template "statCard" dict "Label" "Active days" "Value" (num $c.ActiveDays) "Icon" "calendar_month"}}
+  {{template "statCard" dict "Label" "Repositories" "Value" (num $c.Repositories) "Icon" "folder_open"}}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-8">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Contribution activity over time</h2>
+        <span class="surface-meta">{{.Granularity}} buckets</span>
+      </div>
+      <div class="surface-body"><div class="chart-wrap"><canvas id="activityChart" height="110"></canvas></div></div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-4">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">PR &amp; review activity</h2></div>
+      <div class="surface-body"><div class="chart-wrap"><canvas id="prChart" height="190"></canvas></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="surface mb-4">
+  <div class="surface-header"><h2 class="surface-title">Repositories contributed to</h2></div>
+  <div class="surface-body p-0">
+    {{if .Repositories}}
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Repository</th><th class="text-end">Commits</th><th class="text-end">+/−</th><th class="text-end">PRs opened</th><th class="text-end">Reviews</th><th class="text-end">Last activity</th></tr></thead>
+      <tbody>
+      {{range .Repositories}}
+        <tr>
+          <td><a class="text-decoration-none" href="{{link (printf "/repositories/%s" .Name) $q}}">{{.Name}}</a>{{template "archivedBadge" .IsArchived}}</td>
+          <td class="text-end">{{num .Commits}}</td>
+          <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+          <td class="text-end">{{num .PRsOpened}}</td>
+          <td class="text-end">{{num .Reviews}}</td>
+          <td class="text-end text-body-secondary">{{datetime .LastActivity}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}{{template "emptyState" "No repository activity in this period."}}{{end}}
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-6">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Pull requests authored</h2><span class="surface-meta">most recent 50</span></div>
+      <div class="surface-body p-0 table-scroll">
+        {{if .PullRequests}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr><th>PR</th><th>Repository</th><th>State</th><th class="text-end">+/−</th><th class="text-end">Created</th></tr></thead>
+          <tbody>
+          {{range .PullRequests}}
+            <tr>
+              <td><a class="text-decoration-none" href="{{.URL}}" target="_blank" rel="noopener noreferrer">#{{.Number}} {{.Title}}</a></td>
+              <td class="text-body-secondary">{{.RepositoryName}}</td>
+              <td><span class="badge text-bg-{{stateBadge .State}}">{{lower .State}}</span></td>
+              <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+              <td class="text-end text-body-secondary text-nowrap">{{date .CreatedAt}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No pull requests authored in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Reviews submitted</h2><span class="surface-meta">most recent 50</span></div>
+      <div class="surface-body p-0 table-scroll">
+        {{if .Reviews}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr><th>Pull request</th><th>Repository</th><th>State</th><th class="text-end">Comments</th><th class="text-end">Submitted</th></tr></thead>
+          <tbody>
+          {{range .Reviews}}
+            <tr>
+              <td><a class="text-decoration-none" href="{{.PullRequestURL}}" target="_blank" rel="noopener noreferrer">#{{.PullRequestNumber}} {{.PullRequestTitle}}</a></td>
+              <td class="text-body-secondary">{{.RepositoryName}}</td>
+              <td><span class="badge text-bg-{{stateBadge .State}}">{{lower .State}}</span></td>
+              <td class="text-end">{{num .CommentCount}}</td>
+              <td class="text-end text-body-secondary text-nowrap">{{date .SubmittedAt}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No reviews submitted in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+
+{{template "metricGlossary" .Metrics}}
+{{end}}
+
+{{define "scripts"}}
+<script>
+  window.devpulseSeries = {{json .Series}};
+  DevPulse.activityChart("activityChart", window.devpulseSeries);
+  DevPulse.prChart("prChart", window.devpulseSeries);
+</script>
+{{end}}

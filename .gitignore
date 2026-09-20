@@ -1,0 +1,19 @@
+# Secrets - never commit the token
+.env
+.env.local
+.env.*.local
+
+# Build output
+/devpulse
+/bin/
+/out/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

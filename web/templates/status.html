@@ -1,0 +1,138 @@
+{{define "content"}}
+
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="page-title mb-0">Synchronization &amp; system status</h1>
+    <p class="page-subtitle mb-0">DevPulse only ever queries the configured organization.</p>
+  </div>
+  <form method="post" action="/status/sync">
+    <button class="btn btn-primary btn-sm" type="submit" {{if .SyncRunning}}disabled{{end}}>
+      <span class="material-symbols-outlined align-middle me-1">sync</span>
+      {{if .SyncRunning}}Synchronizing…{{else}}Sync now{{end}}
+    </button>
+  </form>
+</div>
+
+{{if .Triggered}}
+<div class="alert alert-success d-flex align-items-center gap-2"><span class="material-symbols-outlined">check_circle</span>
+  <div>Synchronization queued. Reload this page in a moment to see the result.</div></div>
+{{end}}
+{{if .WorkerError}}
+<div class="alert alert-danger">
+  <div class="d-flex align-items-center gap-2 mb-1"><span class="material-symbols-outlined">error</span><strong>Last synchronization reported errors</strong></div>
+  <pre class="mb-0 small sync-error">{{.WorkerError}}</pre>
+</div>
+{{end}}
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-lg-6">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Synchronization</h2></div>
+      <div class="surface-body">
+        <dl class="status-list mb-0">
+          <dt>GitHub organization</dt><dd><strong>{{.Org}}</strong> <span class="text-body-secondary small">(the only one queried)</span></dd>
+          <dt>Last successful sync</dt>
+          <dd>{{if .LastSuccess}}{{datetime .LastSuccess.FinishedAt}} <span class="text-body-secondary">({{ago .LastSuccess.FinishedAt}})</span>{{else}}never{{end}}</dd>
+          <dt>Next sync</dt>
+          <dd>{{if .SyncRunning}}running now{{else}}{{.NextSync.UTC.Format "2006-01-02 15:04 MST"}}{{end}}</dd>
+          <dt>Sync status</dt>
+          <dd>
+            {{if .SyncRunning}}<span class="badge text-bg-primary">running</span>
+            {{else if .LastRun}}<span class="badge text-bg-{{stateBadge .LastRun.Status}}">{{.LastRun.Status}}</span>
+            {{else}}<span class="badge text-bg-secondary">no run yet</span>{{end}}
+          </dd>
+          <dt>Last sync duration</dt>
+          <dd>{{if .LastRun}}{{printf "%.0f seconds" .LastRun.DurationSeconds}}{{else}}—{{end}}</dd>
+          <dt>Sync interval</dt><dd>{{.SyncInterval}}</dd>
+          <dt>History window</dt><dd>{{.HistoryMonths}} months</dd>
+          <dt>Archived repositories</dt>
+          <dd>{{if .IncludeArchived}}included in analytics{{else}}stored, excluded from analytics{{end}}</dd>
+          <dt>Excluded users</dt>
+          <dd>{{if .ExcludedUsers}}{{range .ExcludedUsers}}<code class="me-1">{{.}}</code>{{end}}{{else}}<span class="text-body-secondary">none</span>{{end}}
+            <div class="text-body-secondary small">Accounts GitHub reports as bots are excluded automatically.</div></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="surface mb-3">
+      <div class="surface-header"><h2 class="surface-title">GitHub GraphQL rate limit</h2></div>
+      <div class="surface-body">
+        {{if .RateLimit.Known}}
+          <div class="d-flex justify-content-between mb-1">
+            <strong>{{num .RateLimit.Remaining}} / {{num .RateLimit.Limit}} points</strong>
+            <span class="text-body-secondary small">resets {{.RateLimit.ResetAt.UTC.Format "15:04 MST"}}</span>
+          </div>
+          <div class="progress" role="progressbar" aria-label="Rate limit remaining" aria-valuenow="{{.RateLimit.Percent}}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar{{if lt .RateLimit.Percent 20}} bg-danger{{else if lt .RateLimit.Percent 50}} bg-warning{{end}}" style="width: {{.RateLimit.Percent}}%"></div>
+          </div>
+          <div class="text-body-secondary small mt-2">Last query cost {{.RateLimit.Cost}} points. Synchronization stops on its own when the budget runs low.</div>
+        {{else}}
+          <span class="text-body-secondary">No GraphQL call has been made yet.</span>
+        {{end}}
+      </div>
+    </div>
+
+    <div class="surface">
+      <div class="surface-header"><h2 class="surface-title">Stored data</h2></div>
+      <div class="surface-body">
+        <dl class="status-list mb-0">
+          <dt>Repositories</dt><dd>{{num .Counts.Repositories}} <span class="text-body-secondary small">({{num .Counts.ArchivedRepositories}} archived)</span></dd>
+          <dt>Contributors</dt><dd>{{num .Counts.Contributors}}</dd>
+          <dt>Commits</dt><dd>{{num .Counts.Commits}}</dd>
+          <dt>Pull requests</dt><dd>{{num .Counts.PullRequests}}</dd>
+          <dt>Reviews</dt><dd>{{num .Counts.Reviews}}</dd>
+          <dt>Daily aggregate rows</dt><dd>{{num .Counts.AggregateRows}}</dd>
+          <dt>Database</dt><dd>{{if .DatabaseOK}}<span class="badge text-bg-success">reachable</span>{{else}}<span class="badge text-bg-danger">unreachable</span>{{end}}</dd>
+          <dt>Schema version</dt><dd><code>{{.SchemaVersion}}</code></dd>
+          <dt>Application uptime</dt><dd>{{.Uptime}}</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="surface mb-4">
+  <div class="surface-header"><h2 class="surface-title">Recent synchronization runs</h2></div>
+  <div class="surface-body p-0 table-responsive">
+    {{if .Runs}}
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr>
+        <th>Started</th><th>Type</th><th>Status</th><th class="text-end">Duration</th>
+        <th class="text-end">Repos</th><th class="text-end">Records</th><th class="text-end">GraphQL cost</th>
+        <th class="text-end">Rate limit left</th><th>Errors</th>
+      </tr></thead>
+      <tbody>
+      {{range .Runs}}
+        <tr>
+          <td class="text-nowrap">{{.StartedAt.UTC.Format "2006-01-02 15:04"}}</td>
+          <td>{{.SyncType}}</td>
+          <td><span class="badge text-bg-{{stateBadge .Status}}">{{.Status}}</span></td>
+          <td class="text-end">{{printf "%.0fs" .DurationSeconds}}</td>
+          <td class="text-end">{{num .Repositories}}</td>
+          <td class="text-end">{{num .RecordsProcessed}}</td>
+          <td class="text-end">{{num .GraphQLCost}}</td>
+          <td class="text-end">{{if gt .RateLimitLimit 0}}{{num .RateLimitRemain}}/{{num .RateLimitLimit}}{{else}}—{{end}}</td>
+          <td class="small text-danger sync-error-cell">{{if .ErrorMessage}}{{.ErrorMessage}}{{else}}<span class="text-body-secondary">—</span>{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}{{template "emptyState" "No synchronization has run yet."}}{{end}}
+  </div>
+</div>
+
+<div class="surface mb-4">
+  <div class="surface-header"><h2 class="surface-title">Security</h2></div>
+  <div class="surface-body">
+    <ul class="mb-0 small text-body-secondary">
+      <li>The GitHub Personal Access Token is read from the <code>GITHUB_TOKEN</code> environment variable, held in memory only, and never written to PostgreSQL, logs, HTML or API responses.</li>
+      <li>Only <code>{{.Org}}</code> is queried. Other organizations the token can reach are never enumerated or imported.</li>
+      <li>DevPulse needs read-only GitHub permissions; it never writes to GitHub.</li>
+    </ul>
+  </div>
+</div>
+
+{{template "metricGlossary" .Metrics}}
+{{end}}

@@ -1,0 +1,97 @@
+{{define "content"}}
+{{$q := .Query}}
+{{$sort := .Sort.Key}}
+
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-3">
+  <div>
+    <h1 class="page-title mb-0">Top contributors</h1>
+    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}} · sorted by <strong>{{.Sort.Label}}</strong></p>
+  </div>
+
+  <div class="dropdown">
+    <button class="btn btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <span class="material-symbols-outlined align-middle me-1">sort</span>Sort by: {{.Sort.Label}}
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end sort-menu">
+      {{range .MetricGroup}}
+        <li><h6 class="dropdown-header">{{.Name}}</h6></li>
+        {{range .Metrics}}
+          <li><a class="dropdown-item{{if eq .Key $sort}} active{{end}}" href="{{sortLink "/contributors" $q .Key}}">{{.Label}}</a></li>
+        {{end}}
+        <li><hr class="dropdown-divider"></li>
+      {{end}}
+    </ul>
+  </div>
+</div>
+
+<p class="text-body-secondary small mb-3">
+  Bots and logins listed in <code>EXCLUDED_USERS</code> are left out of this ranking.
+  {{if not .IncludeArchived}}Archived repositories are excluded too.{{end}}
+</p>
+
+<div class="surface mb-4">
+  <div class="surface-body p-0 table-responsive">
+    {{if .Rows}}
+    <table class="table table-hover align-middle ranking-table mb-0">
+      <thead>
+        <tr>
+          <th class="text-end">#</th>
+          <th>Contributor</th>
+          <th class="text-end{{if eq $sort "commits"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "commits"}}">Commits</a></th>
+          <th class="text-end">+/−</th>
+          <th class="text-end{{if eq $sort "changed_files"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "changed_files"}}">Files</a></th>
+          <th class="text-end{{if eq $sort "prs_opened"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "prs_opened"}}">PRs opened</a></th>
+          <th class="text-end{{if eq $sort "prs_merged"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "prs_merged"}}">Merged</a></th>
+          <th class="text-end{{if eq $sort "prs_closed"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "prs_closed"}}">Closed</a></th>
+          <th class="text-end{{if eq $sort "reviews_submitted"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "reviews_submitted"}}">Reviews</a></th>
+          <th class="text-end{{if eq $sort "approvals"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "approvals"}}">Approvals</a></th>
+          <th class="text-end{{if eq $sort "changes_requested"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "changes_requested"}}">Changes req.</a></th>
+          <th class="text-end{{if eq $sort "review_comments"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "review_comments"}}">Review comments</a></th>
+          <th class="text-end{{if eq $sort "unique_prs_reviewed"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "unique_prs_reviewed"}}">PRs reviewed</a></th>
+          <th class="text-end{{if eq $sort "active_days"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "active_days"}}">Active days</a></th>
+          <th class="text-end{{if eq $sort "repositories"}} sorted{{end}}"><a href="{{sortLink "/contributors" $q "repositories"}}">Repos</a></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{$offset := .Offset}}
+        {{range $i, $row := .Rows}}
+        <tr>
+          <td class="text-end text-body-secondary">{{add $offset (add $i 1)}}</td>
+          <td>{{template "contributorCell" dict "Contributor" $row.Contributor "Query" $q}}</td>
+          <td class="text-end">{{num $row.Commits}}</td>
+          <td class="text-end text-nowrap"><span class="diff-add">+{{compact $row.Additions}}</span> <span class="diff-del">−{{compact $row.Deletions}}</span></td>
+          <td class="text-end">{{num $row.ChangedFiles}}</td>
+          <td class="text-end">{{num $row.PRsOpened}}</td>
+          <td class="text-end">{{num $row.PRsMerged}}</td>
+          <td class="text-end">{{num $row.PRsClosed}}</td>
+          <td class="text-end">{{num $row.ReviewsSubmitted}}</td>
+          <td class="text-end">{{num $row.Approvals}}</td>
+          <td class="text-end">{{num $row.ChangesRequested}}</td>
+          <td class="text-end">{{num $row.ReviewComments}}</td>
+          <td class="text-end">{{num $row.UniquePRsReviewed}}</td>
+          <td class="text-end">{{num $row.ActiveDays}}</td>
+          <td class="text-end">{{num $row.Repositories}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+      {{template "emptyState" "No contributor activity in this period."}}
+    {{end}}
+  </div>
+</div>
+
+{{if or .HasNext (gt .Page 1)}}
+<nav class="d-flex justify-content-between mb-4">
+  {{if gt .Page 1}}
+    <a class="btn btn-outline-secondary btn-sm" href="{{pageLink "/contributors" $q .PrevPage}}">← Previous</a>
+  {{else}}<span></span>{{end}}
+  <span class="text-body-secondary small align-self-center">Page {{.Page}}</span>
+  {{if .HasNext}}
+    <a class="btn btn-outline-secondary btn-sm" href="{{pageLink "/contributors" $q .NextPage}}">Next →</a>
+  {{else}}<span></span>{{end}}
+</nav>
+{{end}}
+
+{{template "metricGlossary" .AllMetrics}}
+{{end}}

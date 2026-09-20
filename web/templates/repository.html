@@ -1,0 +1,134 @@
+{{define "content"}}
+{{$q := .Query}}
+{{$r := .Repository}}
+
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="page-title mb-0">
+      {{$r.Name}}
+      {{if $r.IsArchived}}<span class="badge text-bg-secondary align-middle">archived</span>{{end}}
+      {{if $r.IsPrivate}}<span class="badge text-bg-light align-middle">private</span>{{end}}
+    </h1>
+    <p class="page-subtitle mb-0">
+      <a href="{{$r.URL}}" target="_blank" rel="noopener noreferrer" class="text-decoration-none">{{$r.FullName}}</a>
+      · {{.Range.Label}}{{if $r.PrimaryLang}} · {{$r.PrimaryLang}}{{end}}
+    </p>
+    {{if $r.Description}}<p class="text-body-secondary mb-0">{{$r.Description}}</p>{{end}}
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{link "/repositories" $q}}">← All repositories</a>
+</div>
+
+{{if .Excluded}}
+<div class="alert alert-secondary d-flex align-items-center gap-2">
+  <span class="material-symbols-outlined">inventory_2</span>
+  <div>This repository is archived. Its numbers are shown here, but it is excluded from organization-wide rankings because <code>INCLUDE_ARCHIVED=false</code>.</div>
+</div>
+{{end}}
+
+<div class="row g-3 mb-4">
+  {{template "statCard" dict "Label" "Contributors" "Value" (num $r.Contributors) "Icon" "group"}}
+  {{template "statCard" dict "Label" "Commits" "Value" (num $r.Commits) "Icon" "commit"}}
+  {{template "statCard" dict "Label" "PRs opened" "Value" (num $r.PRsOpened) "Icon" "call_split"}}
+  {{template "statCard" dict "Label" "PRs merged" "Value" (num $r.PRsMerged) "Icon" "merge"}}
+  {{template "statCard" dict "Label" "Reviews" "Value" (num $r.Reviews) "Icon" "rate_review"}}
+  {{template "statCard" dict "Label" "Net lines" "Value" (signed (sub $r.Additions $r.Deletions)) "Icon" "difference"}}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-8">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Activity over time</h2>
+        <span class="surface-meta">{{.Granularity}} buckets</span>
+      </div>
+      <div class="surface-body"><div class="chart-wrap"><canvas id="activityChart" height="110"></canvas></div></div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-4">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Pull requests &amp; reviews</h2></div>
+      <div class="surface-body"><div class="chart-wrap"><canvas id="prChart" height="190"></canvas></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="surface mb-4">
+  <div class="surface-header"><h2 class="surface-title">Contributors</h2></div>
+  <div class="surface-body p-0 table-responsive">
+    {{if .Contributors}}
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Contributor</th><th class="text-end">Commits</th><th class="text-end">+/−</th><th class="text-end">PRs opened</th><th class="text-end">PRs merged</th><th class="text-end">Reviews</th><th class="text-end">Active days</th></tr></thead>
+      <tbody>
+      {{range .Contributors}}
+        <tr>
+          <td>{{template "contributorCell" dict "Contributor" .Contributor "Query" $q}}</td>
+          <td class="text-end">{{num .Commits}}</td>
+          <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+          <td class="text-end">{{num .PRsOpened}}</td>
+          <td class="text-end">{{num .PRsMerged}}</td>
+          <td class="text-end">{{num .ReviewsSubmitted}}</td>
+          <td class="text-end">{{num .ActiveDays}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}{{template "emptyState" "No contributor activity in this period."}}{{end}}
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-6">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Pull requests</h2><span class="surface-meta">most recent 50</span></div>
+      <div class="surface-body p-0 table-scroll">
+        {{if .PullRequests}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr><th>PR</th><th>Author</th><th>State</th><th class="text-end">Created</th></tr></thead>
+          <tbody>
+          {{range .PullRequests}}
+            <tr>
+              <td><a class="text-decoration-none" href="{{.URL}}" target="_blank" rel="noopener noreferrer">#{{.Number}} {{.Title}}</a></td>
+              <td class="text-body-secondary">{{if .AuthorLogin}}<a class="text-decoration-none" href="{{link (printf "/contributors/%s" .AuthorLogin) $q}}">@{{.AuthorLogin}}</a>{{else}}unknown{{end}}</td>
+              <td><span class="badge text-bg-{{stateBadge .State}}">{{lower .State}}</span></td>
+              <td class="text-end text-body-secondary text-nowrap">{{date .CreatedAt}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No pull requests in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <div class="surface h-100">
+      <div class="surface-header"><h2 class="surface-title">Reviews</h2><span class="surface-meta">most recent 50</span></div>
+      <div class="surface-body p-0 table-scroll">
+        {{if .Reviews}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr><th>Pull request</th><th>Reviewer</th><th>State</th><th class="text-end">Submitted</th></tr></thead>
+          <tbody>
+          {{range .Reviews}}
+            <tr>
+              <td><a class="text-decoration-none" href="{{.PullRequestURL}}" target="_blank" rel="noopener noreferrer">#{{.PullRequestNumber}} {{.PullRequestTitle}}</a></td>
+              <td class="text-body-secondary">{{if .ReviewerLogin}}<a class="text-decoration-none" href="{{link (printf "/contributors/%s" .ReviewerLogin) $q}}">@{{.ReviewerLogin}}</a>{{else}}unknown{{end}}</td>
+              <td><span class="badge text-bg-{{stateBadge .State}}">{{lower .State}}</span></td>
+              <td class="text-end text-body-secondary text-nowrap">{{date .SubmittedAt}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No reviews in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+  window.devpulseSeries = {{json .Series}};
+  DevPulse.activityChart("activityChart", window.devpulseSeries);
+  DevPulse.prChart("prChart", window.devpulseSeries);
+</script>
+{{end}}

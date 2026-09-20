@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+*.md
+!README.md
+docs/
+.DS_Store

@@ -1,0 +1,10 @@
+{{define "content"}}
+<div class="surface error-panel">
+  <div class="surface-body text-center py-5">
+    <span class="material-symbols-outlined error-icon">{{if eq .Code 404}}search_off{{else}}report{{end}}</span>
+    <h1 class="page-title mt-2">{{.Heading}}</h1>
+    <p class="text-body-secondary">{{.Message}}</p>
+    <a class="btn btn-primary" href="{{link "/" .Query}}">Back to the dashboard</a>
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,108 @@
+{{define "navLink"}}
+<a class="app-nav-link{{if .Active}} active{{end}}" href="{{.Href}}">
+  <span class="material-symbols-outlined">{{.Icon}}</span>{{.Label}}
+</a>
+{{end}}
+
+{{define "syncIndicator"}}
+<a class="sync-chip text-decoration-none{{if .SyncRunning}} running{{end}}" href="{{link "/status" .Query}}"
+   title="Last successful synchronization">
+  <span class="material-symbols-outlined">{{if .SyncRunning}}sync{{else}}cloud_done{{end}}</span>
+  <span class="d-none d-lg-inline">
+    {{if .SyncRunning}}Syncing…{{else}}Synced {{ago .LastSync}}{{end}}
+  </span>
+</a>
+{{end}}
+
+{{define "periodPicker"}}
+<form class="period-picker d-flex align-items-center gap-2" method="get" action="{{.Path}}">
+  {{range extraParams .Query}}<input type="hidden" name="{{.Key}}" value="{{.Value}}">{{end}}
+  <label class="visually-hidden" for="period">Date range</label>
+  <select class="form-select form-select-sm period-select" id="period" name="period" data-period-select>
+    {{$cur := .Range.Key}}
+    {{range .PeriodOptions}}
+      <option value="{{.Key}}"{{if eq .Key $cur}} selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+  <div class="d-flex align-items-center gap-1 custom-range{{if ne .Range.Key "custom"}} d-none{{end}}" data-custom-range>
+    <input type="date" class="form-control form-control-sm" name="from" value="{{.Range.FromString}}" aria-label="From date">
+    <span class="text-body-secondary">→</span>
+    <input type="date" class="form-control form-control-sm" name="to" value="{{.Range.ToString}}" aria-label="To date">
+  </div>
+  <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+</form>
+{{end}}
+
+{{define "statCard"}}
+<div class="col-6 col-md-4 col-xl-2">
+  <div class="stat-card">
+    <div class="stat-card-icon"><span class="material-symbols-outlined">{{.Icon}}</span></div>
+    <div class="stat-card-value">{{.Value}}</div>
+    <div class="stat-card-label">{{.Label}}</div>
+    {{if .Sub}}<div class="stat-card-sub">{{.Sub}}</div>{{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "avatar"}}
+<span class="avatar" aria-hidden="true">
+  {{if .AvatarURL}}<img src="{{.AvatarURL}}" alt="" loading="lazy" width="28" height="28">
+  {{else}}<span class="avatar-initials">{{initials .DisplayName}}</span>{{end}}
+</span>
+{{end}}
+
+{{define "contributorCell"}}
+<a class="contributor-cell text-decoration-none" href="{{link (printf "/contributors/%s" .Contributor.Login) .Query}}">
+  {{template "avatar" .Contributor}}
+  <span>
+    <span class="contributor-name">{{.Contributor.DisplayName}}</span>
+    <span class="contributor-login">@{{.Contributor.Login}}</span>
+  </span>
+</a>
+{{end}}
+
+{{define "emptyState"}}
+<div class="empty-state">
+  <span class="material-symbols-outlined">inbox</span>
+  <p class="mb-0">{{.}}</p>
+</div>
+{{end}}
+
+{{define "deltaBadge"}}
+{{if gt .Previous 0}}
+  {{$d := sub .Current .Previous}}
+  <span class="delta {{if gt $d 0}}up{{else if lt $d 0}}down{{end}}">
+    {{if gt $d 0}}▲{{else if lt $d 0}}▼{{else}}■{{end}} {{pct2 $d .Previous}}
+  </span>
+{{end}}
+{{end}}
+
+{{define "archivedBadge"}}{{if .}}<span class="badge rounded-pill text-bg-secondary ms-1" title="Archived repository">archived</span>{{end}}{{end}}
+
+{{define "metricGlossary"}}
+<div class="accordion metric-glossary" id="metricGlossary">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#glossaryBody">
+        <span class="material-symbols-outlined me-2">help</span> What each metric means
+      </button>
+    </h2>
+    <div id="glossaryBody" class="accordion-collapse collapse" data-bs-parent="#metricGlossary">
+      <div class="accordion-body">
+        <p class="text-body-secondary small">
+          DevPulse reports observable engineering activity. It deliberately does not combine these
+          numbers into a single score and does not judge whether a contributor is productive:
+          different metrics describe different kinds of contribution and are meant to be read
+          and sorted independently.
+        </p>
+        <dl class="row small mb-0">
+          {{range .}}
+          <dt class="col-sm-3">{{.Label}}</dt>
+          <dd class="col-sm-9 text-body-secondary">{{.Description}}</dd>
+          {{end}}
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

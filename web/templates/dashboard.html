@@ -1,0 +1,197 @@
+{{define "content"}}
+
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="page-title mb-0">Overview</h1>
+    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}} · {{.Range.FromString}} → {{.Range.ToString}}</p>
+  </div>
+  <div class="text-body-secondary small">
+    Every number on this page is read from PostgreSQL aggregates. Changing the period never calls GitHub.
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  {{template "statCard" dict "Label" "Active contributors" "Value" (num .Overview.ActiveContributors) "Icon" "group"
+      "Sub" (printf "%s previously" (num .Previous.ActiveContributors))}}
+  {{template "statCard" dict "Label" "Commits" "Value" (num .Overview.Commits) "Icon" "commit"
+      "Sub" (printf "%s previously" (num .Previous.Commits))}}
+  {{template "statCard" dict "Label" "PRs opened" "Value" (num .Overview.PRsOpened) "Icon" "call_split"
+      "Sub" (printf "%s previously" (num .Previous.PRsOpened))}}
+  {{template "statCard" dict "Label" "PRs merged" "Value" (num .Overview.PRsMerged) "Icon" "merge"
+      "Sub" (printf "%s previously" (num .Previous.PRsMerged))}}
+  {{template "statCard" dict "Label" "Reviews" "Value" (num .Overview.Reviews) "Icon" "rate_review"
+      "Sub" (printf "%s previously" (num .Previous.Reviews))}}
+  {{template "statCard" dict "Label" "Active repositories" "Value" (num .Overview.ActiveRepositories) "Icon" "folder_open"
+      "Sub" (printf "%s lines net" (signed (sub .Overview.Additions .Overview.Deletions)))}}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-8">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Contribution activity over time</h2>
+        <span class="surface-meta">{{.Granularity}} buckets</span>
+      </div>
+      <div class="surface-body">
+        <div class="chart-wrap"><canvas id="activityChart" height="110"></canvas></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-4">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Pull requests &amp; reviews</h2>
+      </div>
+      <div class="surface-body">
+        <div class="chart-wrap"><canvas id="prChart" height="190"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  {{$q := .Query}}
+  <div class="col-12 col-lg-4">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Top code contributors</h2>
+        <a class="surface-link" href="{{sortLink "/contributors" $q "commits"}}">All</a>
+      </div>
+      <div class="surface-body p-0">
+        {{if .TopCommits}}
+        <table class="table table-hover align-middle mb-0">
+          <tbody>
+          {{range .TopCommits}}
+            <tr>
+              <td>{{template "contributorCell" dict "Contributor" .Contributor "Query" $q}}</td>
+              <td class="text-end"><strong>{{num .Commits}}</strong> <span class="text-body-secondary small">commits</span></td>
+              <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No commits in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Top PR authors</h2>
+        <a class="surface-link" href="{{sortLink "/contributors" $q "prs_opened"}}">All</a>
+      </div>
+      <div class="surface-body p-0">
+        {{if .TopAuthors}}
+        <table class="table table-hover align-middle mb-0">
+          <tbody>
+          {{range .TopAuthors}}
+            <tr>
+              <td>{{template "contributorCell" dict "Contributor" .Contributor "Query" $q}}</td>
+              <td class="text-end"><strong>{{num .PRsOpened}}</strong> <span class="text-body-secondary small">opened</span></td>
+              <td class="text-end text-nowrap">{{num .PRsMerged}} merged</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No pull requests in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Top reviewers</h2>
+        <a class="surface-link" href="{{sortLink "/contributors" $q "reviews_submitted"}}">All</a>
+      </div>
+      <div class="surface-body p-0">
+        {{if .TopReviewers}}
+        <table class="table table-hover align-middle mb-0">
+          <tbody>
+          {{range .TopReviewers}}
+            <tr>
+              <td>{{template "contributorCell" dict "Contributor" .Contributor "Query" $q}}</td>
+              <td class="text-end"><strong>{{num .ReviewsSubmitted}}</strong> <span class="text-body-secondary small">reviews</span></td>
+              <td class="text-end text-nowrap">{{num .UniquePRsReviewed}} PRs</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No reviews in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-7">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Recent contribution activity</h2>
+        <span class="surface-meta">daily rollup</span>
+      </div>
+      <div class="surface-body p-0 table-scroll">
+        {{if .Activity}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr>
+            <th>Date</th><th>Contributor</th><th>Repository</th>
+            <th class="text-end">Commits</th><th class="text-end">PRs</th><th class="text-end">Reviews</th><th class="text-end">Lines</th>
+          </tr></thead>
+          <tbody>
+          {{range .Activity}}
+            <tr>
+              <td class="text-nowrap text-body-secondary">{{date .Date}}</td>
+              <td>{{template "contributorCell" dict "Contributor" .Contributor "Query" $q}}</td>
+              <td><a class="text-decoration-none" href="{{link (printf "/repositories/%s" .Repository) $q}}">{{.Repository}}</a></td>
+              <td class="text-end">{{num .Commits}}</td>
+              <td class="text-end">{{num .PRsOpened}}</td>
+              <td class="text-end">{{num .Reviews}}</td>
+              <td class="text-end text-nowrap"><span class="diff-add">+{{compact .Additions}}</span> <span class="diff-del">−{{compact .Deletions}}</span></td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No activity recorded in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-5">
+    <div class="surface h-100">
+      <div class="surface-header">
+        <h2 class="surface-title">Repositories</h2>
+        <a class="surface-link" href="{{link "/repositories" $q}}">All</a>
+      </div>
+      <div class="surface-body p-0">
+        {{if .Repositories}}
+        <table class="table table-hover align-middle mb-0">
+          <thead><tr><th>Repository</th><th class="text-end">Commits</th><th class="text-end">PRs</th><th class="text-end">Reviews</th></tr></thead>
+          <tbody>
+          {{range .Repositories}}
+            <tr>
+              <td>
+                <a class="text-decoration-none" href="{{link (printf "/repositories/%s" .Name) $q}}">{{.Name}}</a>
+                {{template "archivedBadge" .IsArchived}}
+              </td>
+              <td class="text-end">{{num .Commits}}</td>
+              <td class="text-end">{{num .PRsOpened}}</td>
+              <td class="text-end">{{num .Reviews}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}{{template "emptyState" "No repositories with activity in this period."}}{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+  window.devpulseSeries = {{json .Series}};
+  DevPulse.activityChart("activityChart", window.devpulseSeries);
+  DevPulse.prChart("prChart", window.devpulseSeries);
+</script>
+{{end}}
