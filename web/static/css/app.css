@@ -322,3 +322,10 @@ main { flex: 1 0 auto; }
 :root[data-bs-theme="dark"] .table > thead th { border-bottom-color: var(--md-outline); }
 :root[data-bs-theme="dark"] .row-archived { opacity: .55; }
 :root[data-bs-theme="dark"] code { color: #f7a8b8; }
+
+/* ---------- Team filter ---------- */
+
+.team-menu { max-height: 70vh; overflow-y: auto; min-width: 260px; }
+.team-menu .dropdown-item { white-space: normal; }
+.team-menu-meta { display: block; font-size: .72rem; color: var(--md-text-muted); }
+.team-menu .dropdown-item.active .team-menu-meta { color: rgba(255, 255, 255, .8); }

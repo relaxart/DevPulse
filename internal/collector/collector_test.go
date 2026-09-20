@@ -28,6 +28,7 @@ func testConfig(org string) *config.Config {
 		SyncInterval:  30 * time.Minute,
 		HistoryMonths: 12,
 		MinRateLimit:  200,
+		SyncTeams:     true,
 	}
 }
 
@@ -578,5 +579,250 @@ func TestSplitFullName(t *testing.T) {
 	owner, name = splitFullName("", "acme", "api")
 	if owner != "acme" || name != "api" {
 		t.Errorf("fallback failed: got %s/%s", owner, name)
+	}
+}
+
+func teamMember(id, login string) github.Actor {
+	return github.Actor{TypeName: "User", ID: id, Login: login, Name: login}
+}
+
+// withTeams adds two teams to the acme fixture: one small, one large enough to
+// force nested pagination of both members and repositories.
+func withTeams(f *orgFixture) *orgFixture {
+	f.teams = []github.Team{
+		{
+			ID: "T_platform", Slug: "platform", Name: "Platform", Description: "Core services",
+			Members: struct {
+				PageInfo github.PageInfo `json:"pageInfo"`
+				Nodes    []github.Actor  `json:"nodes"`
+			}{Nodes: []github.Actor{
+				teamMember("U_alice", "alice"),
+				teamMember("U_bob", "bob"),
+				teamMember("U_carol", "carol"),
+			}},
+			Repositories: struct {
+				PageInfo github.PageInfo         `json:"pageInfo"`
+				Nodes    []github.TeamRepository `json:"nodes"`
+			}{Nodes: []github.TeamRepository{
+				{ID: "R_api", Name: "api", NameWithOwner: "acme/api"},
+				{ID: "R_web", Name: "web", NameWithOwner: "acme/web"},
+				{ID: "R_unknown", Name: "elsewhere", NameWithOwner: "other/elsewhere"},
+			}},
+		},
+		{
+			ID: "T_design", Slug: "design", Name: "Design",
+			Members: struct {
+				PageInfo github.PageInfo `json:"pageInfo"`
+				Nodes    []github.Actor  `json:"nodes"`
+			}{Nodes: []github.Actor{teamMember("U_carol", "carol")}},
+			Repositories: struct {
+				PageInfo github.PageInfo         `json:"pageInfo"`
+				Nodes    []github.TeamRepository `json:"nodes"`
+			}{Nodes: []github.TeamRepository{{ID: "R_web", Name: "web", NameWithOwner: "acme/web"}}},
+		},
+	}
+	return f
+}
+
+func TestSyncTeamsStoresMembershipAndRepositories(t *testing.T) {
+	api := newFakeAPI(50, withTeams(acmeFixture()))
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	result, err := c.Sync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != models.SyncStatusSuccess {
+		t.Fatalf("status = %s, errors = %v", result.Status, result.Errors)
+	}
+
+	if len(store.teams) != 2 {
+		t.Fatalf("stored %d teams, want 2", len(store.teams))
+	}
+	platform := store.teams["T_platform"]
+	if platform == nil || platform.Slug != "platform" || platform.Name != "Platform" {
+		t.Fatalf("platform team = %+v", platform)
+	}
+	org := store.orgsByGitHubID["O_acme"]
+	if platform.OrganizationID != org.ID {
+		t.Errorf("team organization_id = %d, want %d", platform.OrganizationID, org.ID)
+	}
+
+	if got := len(store.teamMembers[platform.ID]); got != 3 {
+		t.Errorf("platform has %d members, want 3", got)
+	}
+	// A repository the team can reach but that is not part of this
+	// organization's import must be skipped rather than stored dangling.
+	if got := len(store.teamRepos[platform.ID]); got != 2 {
+		t.Errorf("platform has %d repository links, want 2 (the foreign repo is skipped)", got)
+	}
+}
+
+func TestSyncTeamsFollowsNestedPagination(t *testing.T) {
+	// A page size of 1 forces the collector through the member and repository
+	// cursors of every team.
+	api := newFakeAPI(1, withTeams(acmeFixture()))
+	store := newFakeStore()
+	cfg := testConfig("acme")
+	cfg.IncludeArchived = true
+	c := newTestCollector(t, cfg, api, store)
+
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.teams) != 2 {
+		t.Fatalf("stored %d teams, want 2", len(store.teams))
+	}
+	platform := store.teams["T_platform"]
+	if got := len(store.teamMembers[platform.ID]); got != 3 {
+		t.Errorf("nested member pagination collected %d of 3 members", got)
+	}
+	if got := len(store.teamRepos[platform.ID]); got != 2 {
+		t.Errorf("nested repository pagination collected %d of 2 links", got)
+	}
+}
+
+func TestTeamMembershipIsReplacedNotMerged(t *testing.T) {
+	fixture := withTeams(acmeFixture())
+	api := newFakeAPI(50, fixture)
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	platform := store.teams["T_platform"]
+	if got := len(store.teamMembers[platform.ID]); got != 3 {
+		t.Fatalf("first sync stored %d members", got)
+	}
+
+	// Bob and Carol leave the team on GitHub.
+	fixture.teams[0].Members.Nodes = []github.Actor{teamMember("U_alice", "alice")}
+	c.contributors = map[string]int64{}
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(store.teamMembers[platform.ID]); got != 1 {
+		t.Errorf("after members left the team still has %d members, want 1", got)
+	}
+}
+
+func TestDeletedTeamsAreRemoved(t *testing.T) {
+	fixture := withTeams(acmeFixture())
+	api := newFakeAPI(50, fixture)
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.teams) != 2 {
+		t.Fatalf("stored %d teams", len(store.teams))
+	}
+
+	fixture.teams = fixture.teams[:1]
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.teams) != 1 {
+		t.Errorf("a team deleted on GitHub is still stored: %d teams remain", len(store.teams))
+	}
+	if _, ok := store.teams["T_design"]; ok {
+		t.Error("the design team should have been removed")
+	}
+}
+
+func TestTeamMembersAreStoredEvenWithoutContributions(t *testing.T) {
+	fixture := withTeams(acmeFixture())
+	// Dave is on the team but has never committed anything.
+	fixture.teams[0].Members.Nodes = append(fixture.teams[0].Members.Nodes, teamMember("U_dave", "dave"))
+	api := newFakeAPI(50, fixture)
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.contributors["U_dave"]; !ok {
+		t.Error("a team member with no contributions must still be stored, or the filter is incomplete")
+	}
+}
+
+func TestTeamFailureDoesNotLoseContributionData(t *testing.T) {
+	api := newFakeAPI(50, withTeams(acmeFixture()))
+	// A token without read:org cannot list teams.
+	api.teamsErr = errors.New("Resource not accessible by integration")
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	result, err := c.Sync(context.Background())
+	if err != nil {
+		t.Fatalf("a team failure must not fail the whole run: %v", err)
+	}
+	if result.Status != models.SyncStatusPartial {
+		t.Errorf("status = %s, want partial", result.Status)
+	}
+	if !strings.Contains(strings.Join(result.Errors, " "), "teams") {
+		t.Errorf("the team error must be reported, got %v", result.Errors)
+	}
+	// Commits, pull requests and reviews were still collected.
+	commits, prs, reviews, _, _ := store.counts()
+	if commits == 0 || prs == 0 || reviews == 0 {
+		t.Errorf("contribution data was lost: %d commits, %d PRs, %d reviews", commits, prs, reviews)
+	}
+}
+
+func TestTeamsCanBeDisabled(t *testing.T) {
+	api := newFakeAPI(50, withTeams(acmeFixture()))
+	store := newFakeStore()
+	cfg := testConfig("acme")
+	cfg.SyncTeams = false
+	c := newTestCollector(t, cfg, api, store)
+
+	result, err := c.Sync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != models.SyncStatusSuccess {
+		t.Errorf("status = %s, errors = %v", result.Status, result.Errors)
+	}
+	if len(store.teams) != 0 {
+		t.Errorf("SYNC_TEAMS=false still imported %d teams", len(store.teams))
+	}
+}
+
+func TestTeamSyncStaysInsideTheConfiguredOrganization(t *testing.T) {
+	other := withTeams(otherOrgFixture())
+	api := newFakeAPI(50, withTeams(acmeFixture()), other)
+	store := newFakeStore()
+	c := newTestCollector(t, testConfig("acme"), api, store)
+
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, login := range api.askedOrgs {
+		if !strings.EqualFold(login, "acme") {
+			t.Errorf("team sync queried organization %q", login)
+		}
+	}
+	org := store.orgsByGitHubID["O_acme"]
+	for _, team := range store.teams {
+		if team.OrganizationID != org.ID {
+			t.Errorf("team %s belongs to organization %d, want %d", team.Slug, team.OrganizationID, org.ID)
+		}
+	}
+}
+
+func TestDedupe(t *testing.T) {
+	got := dedupe([]int64{3, 1, 3, 2, 1})
+	want := []int64{3, 1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("dedupe = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dedupe = %v, want %v", got, want)
+		}
 	}
 }

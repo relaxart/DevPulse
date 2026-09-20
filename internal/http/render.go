@@ -79,6 +79,7 @@ func templateFuncs() template.FuncMap {
 		"sortLink":    sortLink,
 		"pageLink":    pageLink,
 		"reportLink":  reportLink,
+		"teamLink":    teamLink,
 		"dict":        dict,
 		"initials":    initials,
 		"stateBadge":  stateBadge,
@@ -331,6 +332,22 @@ func reportLink(q url.Values, periodKey string) template.URL {
 		v.Set("period", periodKey)
 	}
 	return template.URL("/report.pdf?" + v.Encode())
+}
+
+// teamLink builds a link that selects a team, or clears the selection when slug
+// is empty. Changing the filter returns to the first page.
+func teamLink(q url.Values, slug string) template.URL {
+	v := cloneValues(q)
+	v.Del("page")
+	if slug == "" {
+		v.Del("team")
+	} else {
+		v.Set("team", slug)
+	}
+	if len(v) == 0 {
+		return template.URL("")
+	}
+	return template.URL("?" + v.Encode())
 }
 
 // dict builds a map inside a template, for partial invocation.

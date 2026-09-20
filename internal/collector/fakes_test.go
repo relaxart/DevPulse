@@ -21,6 +21,7 @@ import (
 type orgFixture struct {
 	org   github.Organization
 	repos []repoFixture
+	teams []github.Team
 }
 
 type repoFixture struct {
@@ -46,6 +47,9 @@ type fakeAPI struct {
 
 	// budgetAfter makes CheckBudget fail once this many calls have been made.
 	budgetAfter int
+
+	// teamsErr simulates a token without the read:org scope.
+	teamsErr error
 
 	askedOrgs  []string
 	askedRepos []string
@@ -200,6 +204,74 @@ func (f *fakeAPI) FetchPullRequestReviews(ctx context.Context, owner, name strin
 	return &github.ReviewPage{PullRequestNumber: number, Reviews: nodes, PageInfo: info}, nil
 }
 
+func (f *fakeAPI) FetchTeams(ctx context.Context, login string, pageSize, memberPageSize, repoPageSize int, after string) (*github.Page[github.Team], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.count()
+	f.askedOrgs = append(f.askedOrgs, login)
+	if f.teamsErr != nil {
+		return nil, f.teamsErr
+	}
+	o, ok := f.orgs[strings.ToLower(login)]
+	if !ok {
+		return nil, fmt.Errorf("%w: organization %q", github.ErrNotFound, login)
+	}
+	// Serve only the first page of each team's nested connections, so the
+	// collector has to follow the cursors.
+	nodes := make([]github.Team, 0, len(o.teams))
+	for _, t := range o.teams {
+		trimmed := t
+		if len(t.Members.Nodes) > f.pageSize {
+			trimmed.Members.Nodes = t.Members.Nodes[:f.pageSize]
+			trimmed.Members.PageInfo = github.PageInfo{HasNextPage: true, EndCursor: cursorAt(f.pageSize)}
+		}
+		if len(t.Repositories.Nodes) > f.pageSize {
+			trimmed.Repositories.Nodes = t.Repositories.Nodes[:f.pageSize]
+			trimmed.Repositories.PageInfo = github.PageInfo{HasNextPage: true, EndCursor: cursorAt(f.pageSize)}
+		}
+		nodes = append(nodes, trimmed)
+	}
+	page, info := paginate(nodes, f.pageSize, after)
+	return &github.Page[github.Team]{Nodes: page, PageInfo: info}, nil
+}
+
+func (f *fakeAPI) teamFixture(login, slug string) (*github.Team, error) {
+	o, ok := f.orgs[strings.ToLower(login)]
+	if !ok {
+		return nil, fmt.Errorf("%w: organization %q", github.ErrNotFound, login)
+	}
+	for i := range o.teams {
+		if o.teams[i].Slug == slug {
+			return &o.teams[i], nil
+		}
+	}
+	return nil, fmt.Errorf("%w: team %s", github.ErrNotFound, slug)
+}
+
+func (f *fakeAPI) FetchTeamMembers(ctx context.Context, login, slug string, pageSize int, after string) (*github.Page[github.Actor], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.count()
+	team, err := f.teamFixture(login, slug)
+	if err != nil {
+		return nil, err
+	}
+	nodes, info := paginate(team.Members.Nodes, f.pageSize, after)
+	return &github.Page[github.Actor]{Nodes: nodes, PageInfo: info}, nil
+}
+
+func (f *fakeAPI) FetchTeamRepositories(ctx context.Context, login, slug string, pageSize int, after string) (*github.Page[github.TeamRepository], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.count()
+	team, err := f.teamFixture(login, slug)
+	if err != nil {
+		return nil, err
+	}
+	nodes, info := paginate(team.Repositories.Nodes, f.pageSize, after)
+	return &github.Page[github.TeamRepository]{Nodes: nodes, PageInfo: info}, nil
+}
+
 func (f *fakeAPI) FetchActors(ctx context.Context, ids []string) ([]github.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -285,6 +357,11 @@ type fakeStore struct {
 	prIDs   map[string]int64                    // repoID|number
 	reviews map[string]models.PullRequestReview // GitHub node id
 
+	teams        map[string]*models.Team // by GitHub node id
+	teamMembers  map[int64][]int64
+	teamRepos    map[int64][]int64
+	teamsDeleted int
+
 	rebuilds  []rebuildCall
 	runs      []*models.SyncRun
 	upsertOps int
@@ -301,6 +378,9 @@ func newFakeStore() *fakeStore {
 		prs:            map[string]models.PullRequest{},
 		prIDs:          map[string]int64{},
 		reviews:        map[string]models.PullRequestReview{},
+		teams:          map[string]*models.Team{},
+		teamMembers:    map[int64][]int64{},
+		teamRepos:      map[int64][]int64{},
 	}
 }
 
@@ -493,6 +573,69 @@ func (s *fakeStore) FinishSyncRun(ctx context.Context, run *models.SyncRun) erro
 		}
 	}
 	return nil
+}
+
+func (s *fakeStore) UpsertTeam(ctx context.Context, t *models.Team) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertOps++
+	if existing, ok := s.teams[t.GitHubID]; ok {
+		id := existing.ID
+		*existing = *t
+		existing.ID = id
+		return id, nil
+	}
+	cp := *t
+	cp.ID = s.id()
+	s.teams[t.GitHubID] = &cp
+	return cp.ID, nil
+}
+
+func (s *fakeStore) ReplaceTeamMembers(ctx context.Context, orgID, teamID int64, ids []int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.teamMembers[teamID] = append([]int64(nil), ids...)
+	return nil
+}
+
+func (s *fakeStore) ReplaceTeamRepositories(ctx context.Context, orgID, teamID int64, ids []int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.teamRepos[teamID] = append([]int64(nil), ids...)
+	return nil
+}
+
+func (s *fakeStore) DeleteTeamsNotIn(ctx context.Context, orgID int64, githubIDs []string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keep := make(map[string]struct{}, len(githubIDs))
+	for _, id := range githubIDs {
+		keep[id] = struct{}{}
+	}
+	var removed int64
+	for id, team := range s.teams {
+		if _, ok := keep[id]; ok {
+			continue
+		}
+		delete(s.teams, id)
+		delete(s.teamMembers, team.ID)
+		delete(s.teamRepos, team.ID)
+		removed++
+	}
+	s.teamsDeleted += int(removed)
+	return removed, nil
+}
+
+func (s *fakeStore) RepositoryIDsByGitHubID(ctx context.Context, orgID int64) (map[string]int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int64{}
+	for githubID, r := range s.repos {
+		if r.OrganizationID == orgID {
+			out[githubID] = r.ID
+		}
+	}
+	return out, nil
 }
 
 // lastRun returns the most recently recorded synchronization run.

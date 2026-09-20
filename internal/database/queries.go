@@ -21,6 +21,9 @@ type Filter struct {
 	IncludeArchived bool
 	// ExcludedLogins are lower-cased logins removed from rankings.
 	ExcludedLogins []string
+	// TeamID scopes the contributor ranking to a team's members and the
+	// repository list to a team's repositories. Nil means the whole organization.
+	TeamID *int64
 }
 
 // args returns the four parameters shared by every analytics statement:
@@ -44,6 +47,31 @@ func (f Filter) baseArgs() []any {
 		f.IncludeArchived,
 	}
 }
+
+// contributorArgs adds the optional team to the shared parameters, for the
+// statements that scope contributors by team membership: $6 team id.
+func (f Filter) contributorArgs() []any {
+	return append(f.args(), f.TeamID)
+}
+
+// repositoryArgs adds the optional team for statements that scope repositories
+// by team access: $6 team id.
+func (f Filter) repositoryArgs() []any {
+	return append(f.args(), f.TeamID)
+}
+
+// teamMemberFilterSQL restricts contributors to the members of one team. A NULL
+// parameter disables it, so the same statement serves the unfiltered view.
+const teamMemberFilterSQL = `
+     AND ($6::bigint IS NULL
+          OR EXISTS (SELECT 1 FROM team_members tm
+                      WHERE tm.contributor_id = c.id AND tm.team_id = $6))`
+
+// teamRepositoryFilterSQL restricts repositories to those one team has access to.
+const teamRepositoryFilterSQL = `
+   AND ($6::bigint IS NULL
+        OR EXISTS (SELECT 1 FROM team_repositories tr
+                    WHERE tr.repository_id = r.id AND tr.team_id = $6))`
 
 // contributorFilterSQL is the shared WHERE clause applied to aggregate reads.
 // Bots and explicitly excluded logins never appear in rankings.
@@ -100,7 +128,7 @@ WITH stats AS (
          COUNT(DISTINCT s.repository_id)       AS repositories
     FROM contributor_daily_stats s
     JOIN repositories r ON r.id = s.repository_id
-    JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + `
+    JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + teamMemberFilterSQL + `
      %s
    GROUP BY s.contributor_id
 ),
@@ -149,9 +177,9 @@ func scanContributorStats(rows pgx.Rows) ([]models.ContributorStats, error) {
 func (db *DB) ContributorRanking(ctx context.Context, f Filter, sortKey string, limit, offset int) ([]models.ContributorStats, error) {
 	metric := metrics.ResolveSort(sortKey)
 	q := fmt.Sprintf(contributorStatsSQL, "") +
-		fmt.Sprintf("\n ORDER BY %s DESC, commits DESC, lower(c.login) ASC\n LIMIT $6 OFFSET $7", metric.SortExpr)
+		fmt.Sprintf("\n ORDER BY %s DESC, commits DESC, lower(c.login) ASC\n LIMIT $7 OFFSET $8", metric.SortExpr)
 
-	args := append(f.args(), limit, offset)
+	args := append(f.contributorArgs(), limit, offset)
 	rows, err := db.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("contributor ranking: %w", redact(err))
@@ -315,7 +343,7 @@ SELECT r.id, r.organization_id, r.github_id, r.name, r.full_name, r.url, r.descr
   FROM repositories r
   LEFT JOIN stats ON stats.repository_id = r.id
  WHERE r.organization_id = $1
-   AND ($4 OR NOT r.is_archived)`
+   AND ($4 OR NOT r.is_archived)` + teamRepositoryFilterSQL
 
 // RepositoryRanking returns repository rows for the repositories page, ordered
 // by one column.
@@ -330,7 +358,7 @@ func (db *DB) RepositoryRanking(ctx context.Context, f Filter, sortKey, sortDir 
 	q := repositoryStatsSQL + fmt.Sprintf(
 		"\n ORDER BY %s %s NULLS LAST, lower(r.name) ASC", col.SortExpr, metrics.SQLDirection(dir))
 
-	rows, err := db.Pool.Query(ctx, q, f.args()...)
+	rows, err := db.Pool.Query(ctx, q, f.repositoryArgs()...)
 	if err != nil {
 		return nil, fmt.Errorf("repository ranking: %w", redact(err))
 	}
@@ -354,8 +382,8 @@ func (db *DB) RepositoryRanking(ctx context.Context, f Filter, sortKey, sortDir 
 
 // RepositoryTotals returns period statistics for one repository.
 func (db *DB) RepositoryTotals(ctx context.Context, f Filter, repositoryID int64) (models.RepositoryStats, error) {
-	q := repositoryStatsSQL + ` AND r.id = $6`
-	args := append(f.args(), repositoryID)
+	q := repositoryStatsSQL + ` AND r.id = $7`
+	args := append(f.repositoryArgs(), repositoryID)
 
 	var r models.RepositoryStats
 	var lastActivity *time.Time
@@ -417,10 +445,10 @@ SELECT r.id, r.name, r.full_name, r.url, r.is_archived,
 
 // RepositoryContributors lists the contributors active in one repository.
 func (db *DB) RepositoryContributors(ctx context.Context, f Filter, repositoryID int64) ([]models.ContributorStats, error) {
-	q := fmt.Sprintf(contributorStatsSQL, "AND s.repository_id = $6") +
+	q := fmt.Sprintf(contributorStatsSQL, "AND s.repository_id = $7") +
 		"\n ORDER BY commits DESC, reviews_submitted DESC, lower(c.login) ASC\n LIMIT 200"
 
-	args := append(f.args(), repositoryID)
+	args := append(f.contributorArgs(), repositoryID)
 	rows, err := db.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("repository contributors: %w", redact(err))

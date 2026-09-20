@@ -31,14 +31,15 @@ statistics in a server-rendered Bootstrap 5 dashboard.
 10. [Incremental synchronization](#10-incremental-synchronization)
 11. [Date filters](#11-date-filters)
 12. [Contributor ranking](#12-contributor-ranking)
-13. [PDF reports](#13-pdf-reports)
-14. [Bot exclusions](#14-bot-exclusions)
-15. [Archived repository handling](#15-archived-repository-handling)
-16. [GitHub GraphQL rate-limit handling](#16-github-graphql-rate-limit-handling)
-17. [Security considerations](#17-security-considerations)
-18. [Troubleshooting](#18-troubleshooting)
-19. [Metric definitions](#19-metric-definitions)
-20. [Development](#20-development)
+13. [Teams](#13-teams)
+14. [PDF reports](#14-pdf-reports)
+15. [Bot exclusions](#15-bot-exclusions)
+16. [Archived repository handling](#16-archived-repository-handling)
+17. [GitHub GraphQL rate-limit handling](#17-github-graphql-rate-limit-handling)
+18. [Security considerations](#18-security-considerations)
+19. [Troubleshooting](#19-troubleshooting)
+20. [Metric definitions](#20-metric-definitions)
+21. [Development](#21-development)
 
 ---
 
@@ -58,6 +59,8 @@ It provides:
 - **Repository list and detail pages** — contributors, commits, PRs, reviews,
   last activity, archived status. Every column header on the list sorts the
   table; clicking the active column flips the direction.
+- **Team filter** — scope the contributors and repositories pages to a GitHub
+  team.
 - **Status page** — sync health, GraphQL rate limit, stored row counts, run history.
 - **Global date filter** — 7 or 30 days, 3/6/12 months or a custom range, applied
   consistently across every page.
@@ -126,6 +129,8 @@ web/static/            CSS and Chart.js wiring
 | `commits` | Default-branch commits; unique on `(repository_id, github_oid)`. |
 | `pull_requests` | Unique on `github_id` and on `(repository_id, number)`. |
 | `pull_request_reviews` | Review submissions; unique on `github_id`. |
+| `teams` | Organization teams, unique on `github_id` and on `(organization_id, slug)`. |
+| `team_members` / `team_repositories` | Team membership and repository access, replaced wholesale on each sync. |
 | `contributor_daily_stats` | Daily read model keyed by `(date, organization_id, contributor_id, repository_id)`. |
 | `sync_runs` | One row per synchronization attempt. |
 | `schema_migrations` | Applied migration versions. |
@@ -181,6 +186,7 @@ responses.
 | `SYNC_INTERVAL` | no | `30m` | Worker period. Minimum `1m`. |
 | `HISTORY_MONTHS` | no | `12` | How far back the first sync reaches (1–120). |
 | `INCLUDE_ARCHIVED` | no | `false` | Include archived repositories in analytics. |
+| `SYNC_TEAMS` | no | `true` | Import organization teams and membership. Needs `read:org`. |
 | `EXCLUDED_USERS` | no | — | Comma-separated logins excluded from rankings. |
 | `APP_PORT` | no | `8080` | Host port published by Docker Compose. |
 | `LISTEN_ADDR` | no | `:8080` | Address the server binds inside the container. |
@@ -214,7 +220,8 @@ DevPulse only reads. It never requires, requests or performs a write.
   - `Pull requests` — pull requests and their reviews.
   - `Metadata` — mandatory, granted automatically.
 - **Organization permissions** (**Read-only**):
-  - `Members` — resolve contributor logins and display names.
+  - `Members` — resolve contributor logins and display names, and read teams and
+    their membership. Without it, set `SYNC_TEAMS=false`.
 
 ### Classic personal access token
 
@@ -322,8 +329,9 @@ and:
 2. Pages through its repositories (archived ones are stored too).
 3. Loads `HISTORY_MONTHS` (default 12) of default-branch commits, pull requests
    and reviews per repository.
-4. Persists everything in PostgreSQL with upserts.
-5. Builds the `contributor_daily_stats` aggregates for the days it touched.
+4. Imports the organization's teams, their members and their repositories.
+5. Persists everything in PostgreSQL with upserts.
+6. Builds the `contributor_daily_stats` aggregates for the days it touched.
 
 For a large organization the first run can take a long time and consume a lot of
 GraphQL budget. Watch progress on `/status` or with `docker compose logs -f app`.
@@ -428,7 +436,53 @@ their reviews — all for the selected period.
 
 ---
 
-## 13. PDF reports
+## 13. Teams
+
+DevPulse imports the organization's **teams** (what GitHub calls a group): their
+members and the repositories each team has access to. Membership is mirrored,
+not accumulated — when somebody leaves a team on GitHub they stop being a member
+here on the next synchronization, and a deleted team is removed.
+
+A **team filter** appears on the contributors and repositories pages:
+
+```
+/contributors?team=platform
+/repositories?team=platform&sort=commits&dir=desc
+```
+
+The two pages scope differently, because they answer different questions:
+
+| Page | `?team=x` means |
+|---|---|
+| `/contributors` | Only members of team *x*, counting their activity across the **whole** organization. |
+| `/repositories` | Only repositories team *x* has access to, with figures covering **every** contributor, not only team members. |
+
+Each page states which rule it is applying, so the numbers are never ambiguous.
+The filter is carried through sorting, pagination and date changes, and an
+unknown or deleted slug quietly falls back to the unfiltered view rather than
+breaking a shared link.
+
+Teams need the **`read:org`** scope. If your token does not have it, team
+synchronization fails while commits, pull requests and reviews are still
+collected; the run is marked `partial` and the status page explains it. To turn
+the feature off entirely:
+
+```dotenv
+SYNC_TEAMS=false
+```
+
+### Limitations
+
+- The dashboard and the PDF report are organization-wide; the team filter is not
+  applied to them, and the report link deliberately does not carry a team.
+- Only teams visible to the token are imported. Secret teams the token cannot
+  read are invisible to DevPulse.
+- A repository a team can reach that is outside `GITHUB_ORG` is ignored, like
+  every other foreign repository.
+
+---
+
+## 14. PDF reports
 
 Every page carries a **Report** button in the header. It offers the period the
 page is currently showing, plus each preset:
@@ -488,7 +542,7 @@ Unicode font would fix this at the cost of a larger binary.
 
 ---
 
-## 14. Bot exclusions
+## 15. Bot exclusions
 
 Two mechanisms, both applied at query time:
 
@@ -504,7 +558,7 @@ in the database and can be restored by removing the login from the list.
 
 ---
 
-## 15. Archived repository handling
+## 16. Archived repository handling
 
 Archived repositories are **always stored**, so nothing disappears from history.
 
@@ -522,7 +576,7 @@ Set `INCLUDE_ARCHIVED=true` to fold them back into every statistic.
 
 ---
 
-## 16. GitHub GraphQL rate-limit handling
+## 17. GitHub GraphQL rate-limit handling
 
 GitHub's GraphQL API uses a point budget (5,000 points/hour for most accounts).
 
@@ -551,7 +605,7 @@ Protections:
 
 ---
 
-## 17. Security considerations
+## 18. Security considerations
 
 **The token.** `GITHUB_TOKEN` is read from the environment into memory. It is
 never stored in PostgreSQL, never rendered in HTML, never included in API
@@ -587,7 +641,7 @@ putting an authenticating proxy in front of it.
 
 ---
 
-## 18. Troubleshooting
+## 19. Troubleshooting
 
 **`GITHUB_TOKEN must be set` at startup**
 Configuration validation failed. The message lists every missing or malformed
@@ -624,6 +678,11 @@ commits in particular). Unavailable values count as zero.
 That is intended. Repository errors are logged with the repository name, the run
 continues, and its status becomes `partial`. The errors are visible on `/status`.
 
+**Team synchronization fails but everything else works**
+The token lacks the `read:org` scope, or the organization restricts team
+visibility. The run is marked `partial` and contribution data is unaffected.
+Grant the scope, or set `SYNC_TEAMS=false` to stop trying.
+
 **`synchronization postponed until the GitHub rate limit recovers`**
 The point budget fell below `MIN_RATE_LIMIT_REMAINING`. Wait for `resetAt` (shown
 on `/status`), lengthen `SYNC_INTERVAL`, or reduce `HISTORY_MONTHS`.
@@ -638,7 +697,7 @@ re-synchronizes from scratch.
 
 ---
 
-## 19. Metric definitions
+## 20. Metric definitions
 
 Also available in the UI under *"What each metric means"*.
 
@@ -664,7 +723,7 @@ the pull request **author**; review metrics to the **reviewer**. Days are UTC.
 
 ---
 
-## 20. Development
+## 21. Development
 
 The repository is plain Go with no code generation.
 
@@ -690,6 +749,8 @@ Test coverage includes date-range calculation, organization filtering and
 isolation, contributor aggregation, ranking and sorting, bot exclusion, archived
 repository exclusion, duplicate-synchronization prevention, upsert idempotency,
 configuration validation, GraphQL pagination (including nested review pages),
+team import (membership replacement, deleted teams, nested pagination) and team
+filtering including cross-organization isolation,
 rate-limit handling, template escaping of GitHub-provided strings, PDF report
 generation for every period (including table widths that must fit the page), and
 an end-to-end check that neither rendering a page nor generating a report ever

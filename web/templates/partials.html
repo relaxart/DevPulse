@@ -81,6 +81,32 @@
 </div>
 {{end}}
 
+{{define "teamFilter"}}
+{{if .Teams}}
+<div class="dropdown team-filter">
+  <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="material-symbols-outlined align-middle me-1">groups</span>
+    {{if .Team}}{{.Team.DisplayName}}{{else}}All teams{{end}}
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end team-menu">
+    <li><h6 class="dropdown-header">GitHub team</h6></li>
+    <li><a class="dropdown-item{{if not .Team}} active{{end}}" href="{{teamLink .Query ""}}">All teams</a></li>
+    <li><hr class="dropdown-divider"></li>
+    {{$active := ""}}{{if .Team}}{{$active = .Team.Slug}}{{end}}
+    {{$q := .Query}}
+    {{range .Teams}}
+      <li>
+        <a class="dropdown-item{{if eq .Slug $active}} active{{end}}" href="{{teamLink $q .Slug}}">
+          {{.DisplayName}}
+          <span class="team-menu-meta">{{num .MemberCount}} members · {{num .RepositoryCount}} repos</span>
+        </a>
+      </li>
+    {{end}}
+  </ul>
+</div>
+{{end}}
+{{end}}
+
 {{define "statCard"}}
 <div class="col-6 col-md-4 col-xl-2">
   <div class="stat-card">

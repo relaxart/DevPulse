@@ -68,6 +68,31 @@ type Repository struct {
 	} `json:"defaultBranchRef"`
 }
 
+// Team is an organization team with its first page of members and repositories.
+type Team struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	Privacy     string `json:"privacy"`
+	Members     struct {
+		PageInfo PageInfo `json:"pageInfo"`
+		Nodes    []Actor  `json:"nodes"`
+	} `json:"members"`
+	Repositories struct {
+		PageInfo PageInfo         `json:"pageInfo"`
+		Nodes    []TeamRepository `json:"nodes"`
+	} `json:"repositories"`
+}
+
+// TeamRepository identifies a repository a team has access to.
+type TeamRepository struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	NameWithOwner string `json:"nameWithOwner"`
+}
+
 // Commit is a commit on the default branch.
 type Commit struct {
 	OID                     string    `json:"oid"`

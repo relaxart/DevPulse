@@ -26,6 +26,9 @@ type GitHubAPI interface {
 	FetchPullRequests(ctx context.Context, owner, name string, pageSize int, after string) (*github.Page[github.PullRequest], error)
 	FetchRepositoryReviews(ctx context.Context, owner, name string, pageSize, reviewPageSize int, after string) (*github.Page[github.PullRequestReviews], error)
 	FetchPullRequestReviews(ctx context.Context, owner, name string, number, pageSize int, after string) (*github.ReviewPage, error)
+	FetchTeams(ctx context.Context, login string, pageSize, memberPageSize, repoPageSize int, after string) (*github.Page[github.Team], error)
+	FetchTeamMembers(ctx context.Context, login, slug string, pageSize int, after string) (*github.Page[github.Actor], error)
+	FetchTeamRepositories(ctx context.Context, login, slug string, pageSize int, after string) (*github.Page[github.TeamRepository], error)
 	FetchActors(ctx context.Context, ids []string) ([]github.Actor, error)
 	RateLimit() github.RateLimit
 	CheckBudget() error
@@ -45,6 +48,11 @@ type Store interface {
 	PullRequestIDsByNumber(ctx context.Context, repoID int64) (map[int]int64, error)
 	UpsertReviews(ctx context.Context, reviews []models.PullRequestReview) (int, error)
 	ContributorsMissingDetails(ctx context.Context, limit int) ([]string, error)
+	UpsertTeam(ctx context.Context, t *models.Team) (int64, error)
+	ReplaceTeamMembers(ctx context.Context, orgID, teamID int64, contributorIDs []int64) error
+	ReplaceTeamRepositories(ctx context.Context, orgID, teamID int64, repositoryIDs []int64) error
+	DeleteTeamsNotIn(ctx context.Context, orgID int64, githubIDs []string) (int64, error)
+	RepositoryIDsByGitHubID(ctx context.Context, orgID int64) (map[string]int64, error)
 	SetRepositoryWatermark(ctx context.Context, repoID int64, w database.Watermark, at time.Time) error
 	RebuildDailyStats(ctx context.Context, orgID int64, repoIDs []int64, from, to time.Time) (int64, error)
 	StartSyncRun(ctx context.Context, orgID int64, syncType string) (int64, error)
@@ -59,6 +67,9 @@ const (
 	reviewPRPageSize   = 25
 	reviewPageSize     = 50
 	actorBatchSize     = 90
+	teamPageSize       = 25
+	teamMemberPageSize = 50
+	teamRepoPageSize   = 50
 	// overlap re-reads a small window before the watermark so records updated in
 	// the seconds around the previous run are not missed.
 	watermarkOverlap = 15 * time.Minute
@@ -250,6 +261,18 @@ func (c *Collector) run(ctx context.Context, org *models.Organization, syncType 
 			result.Errors = append(result.Errors, msg)
 			c.log.Error("repository synchronization failed, continuing with the next repository",
 				"repository", repo.FullName, "sync_type", syncType, "error", err)
+		}
+	}
+
+	if c.cfg.SyncTeams {
+		if err := c.SyncTeams(ctx, org); err != nil {
+			// Team access needs the read:org scope. Missing it must degrade the
+			// run to partial, not lose the contribution data already collected.
+			result.Status = models.SyncStatusPartial
+			result.Errors = append(result.Errors, fmt.Sprintf("teams: %v", err))
+			c.log.Error("team synchronization failed; contribution data is unaffected",
+				"error", err,
+				"hint", "the token needs the read:org scope, or set SYNC_TEAMS=false")
 		}
 	}
 
@@ -606,6 +629,157 @@ func (c *Collector) storeReviews(ctx context.Context, org *models.Organization, 
 		w.add(*r.SubmittedAt)
 	}
 	return c.store.UpsertReviews(ctx, batch)
+}
+
+// SyncTeams mirrors the organization's teams, their members and the
+// repositories they have access to.
+//
+// Membership is replaced rather than merged: people leave teams, and an
+// append-only import would keep them as members forever.
+func (c *Collector) SyncTeams(ctx context.Context, org *models.Organization) error {
+	repoIDs, err := c.store.RepositoryIDsByGitHubID(ctx, org.ID)
+	if err != nil {
+		return err
+	}
+
+	var (
+		cursor  string
+		seen    []string
+		members int
+		links   int
+	)
+	for {
+		page, err := c.api.FetchTeams(ctx, c.cfg.GitHubOrg, teamPageSize, teamMemberPageSize, teamRepoPageSize, cursor)
+		if err != nil {
+			return fmt.Errorf("list teams: %w", err)
+		}
+		for _, node := range page.Nodes {
+			teamID, err := c.store.UpsertTeam(ctx, &models.Team{
+				OrganizationID: org.ID,
+				GitHubID:       node.ID,
+				Slug:           node.Slug,
+				Name:           node.Name,
+				Description:    node.Description,
+				URL:            node.URL,
+				Privacy:        node.Privacy,
+			})
+			if err != nil {
+				return err
+			}
+			seen = append(seen, node.ID)
+
+			memberIDs, err := c.teamMemberIDs(ctx, node)
+			if err != nil {
+				return fmt.Errorf("team %s members: %w", node.Slug, err)
+			}
+			if err := c.store.ReplaceTeamMembers(ctx, org.ID, teamID, memberIDs); err != nil {
+				return err
+			}
+			members += len(memberIDs)
+
+			repos, err := c.teamRepositoryIDs(ctx, node, repoIDs)
+			if err != nil {
+				return fmt.Errorf("team %s repositories: %w", node.Slug, err)
+			}
+			if err := c.store.ReplaceTeamRepositories(ctx, org.ID, teamID, repos); err != nil {
+				return err
+			}
+			links += len(repos)
+		}
+		if !page.PageInfo.HasNextPage || page.PageInfo.EndCursor == "" {
+			break
+		}
+		cursor = page.PageInfo.EndCursor
+	}
+
+	removed, err := c.store.DeleteTeamsNotIn(ctx, org.ID, seen)
+	if err != nil {
+		return err
+	}
+
+	c.log.Info("teams synchronized",
+		"teams", len(seen),
+		"memberships", members,
+		"repository_links", links,
+		"teams_removed", removed,
+	)
+	return nil
+}
+
+// teamMemberIDs resolves a team's members, following nested pagination when the
+// team has more members than fit on the first page.
+func (c *Collector) teamMemberIDs(ctx context.Context, team github.Team) ([]int64, error) {
+	ids := make([]int64, 0, len(team.Members.Nodes))
+	add := func(actors []github.Actor) error {
+		for i := range actors {
+			// A team member need not have contributed anything yet; storing the
+			// account keeps the filter complete.
+			id, err := c.contributorID(ctx, &actors[i])
+			if err != nil {
+				return err
+			}
+			if id != nil {
+				ids = append(ids, *id)
+			}
+		}
+		return nil
+	}
+	if err := add(team.Members.Nodes); err != nil {
+		return nil, err
+	}
+
+	info := team.Members.PageInfo
+	for info.HasNextPage && info.EndCursor != "" {
+		page, err := c.api.FetchTeamMembers(ctx, c.cfg.GitHubOrg, team.Slug, teamMemberPageSize, info.EndCursor)
+		if err != nil {
+			return nil, err
+		}
+		if err := add(page.Nodes); err != nil {
+			return nil, err
+		}
+		info = page.PageInfo
+	}
+	return dedupe(ids), nil
+}
+
+// teamRepositoryIDs resolves a team's repositories against the ones already
+// imported. A repository the team can reach but that is not part of this
+// organization's import is skipped.
+func (c *Collector) teamRepositoryIDs(ctx context.Context, team github.Team, known map[string]int64) ([]int64, error) {
+	ids := make([]int64, 0, len(team.Repositories.Nodes))
+	add := func(repos []github.TeamRepository) {
+		for _, r := range repos {
+			if id, ok := known[r.ID]; ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	add(team.Repositories.Nodes)
+
+	info := team.Repositories.PageInfo
+	for info.HasNextPage && info.EndCursor != "" {
+		page, err := c.api.FetchTeamRepositories(ctx, c.cfg.GitHubOrg, team.Slug, teamRepoPageSize, info.EndCursor)
+		if err != nil {
+			return nil, err
+		}
+		add(page.Nodes)
+		info = page.PageInfo
+	}
+	return dedupe(ids), nil
+}
+
+// dedupe removes repeats while preserving order.
+func dedupe(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := ids[:0]
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // SyncContributors fills in display names and avatars for accounts first seen

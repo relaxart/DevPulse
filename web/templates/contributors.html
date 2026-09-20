@@ -5,9 +5,14 @@
 <div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-3">
   <div>
     <h1 class="page-title mb-0">Top contributors</h1>
-    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}} · sorted by <strong>{{.Sort.Label}}</strong></p>
+    <p class="page-subtitle mb-0">
+      {{.Org}}{{if .Team}} · team <strong>{{.Team.DisplayName}}</strong>{{end}} ·
+      {{.Range.Label}} · sorted by <strong>{{.Sort.Label}}</strong>
+    </p>
   </div>
 
+  <div class="d-flex flex-wrap gap-2">
+  {{template "teamFilter" .}}
   <div class="dropdown">
     <button class="btn btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
       <span class="material-symbols-outlined align-middle me-1">sort</span>Sort by: {{.Sort.Label}}
@@ -22,11 +27,16 @@
       {{end}}
     </ul>
   </div>
+  </div>
 </div>
 
 <p class="text-body-secondary small mb-3">
   Bots and logins listed in <code>EXCLUDED_USERS</code> are left out of this ranking.
   {{if not .IncludeArchived}}Archived repositories are excluded too.{{end}}
+  {{if .Team}}
+    Showing the <strong>{{.Team.DisplayName}}</strong> team: its {{num .Team.MemberCount}} members,
+    counting their activity across the whole organization.
+  {{end}}
 </p>
 
 <div class="surface mb-4">
@@ -76,7 +86,11 @@
       </tbody>
     </table>
     {{else}}
-      {{template "emptyState" "No contributor activity in this period."}}
+      {{if .Team}}
+        {{template "emptyState" "No members of this team were active in this period."}}
+      {{else}}
+        {{template "emptyState" "No contributor activity in this period."}}
+      {{end}}
     {{end}}
   </div>
 </div>
