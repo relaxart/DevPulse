@@ -34,6 +34,7 @@ type testServer struct {
 	org        *models.Organization
 	repoID     int64
 	alice      int64
+	teamID     int64
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -179,6 +180,25 @@ func (ts *testServer) seed(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	teamID, err := ts.db.UpsertTeam(ctx, &models.Team{
+		OrganizationID: org.ID, GitHubID: "T_1", Slug: "platform", Name: "Platform",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.teamID = teamID
+	if err := ts.db.ReplaceTeamMembers(ctx, org.ID, teamID, []int64{alice}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.db.ReplaceTeamRepositories(ctx, org.ID, teamID, []int64{repoID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.db.UpsertTeam(ctx, &models.Team{
+		OrganizationID: org.ID, GitHubID: "T_2", Slug: "design", Name: "Design",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := ts.db.RebuildDailyStats(ctx, org.ID, []int64{repoID},
 		time.Now().AddDate(-2, 0, 0), time.Now()); err != nil {
 		t.Fatal(err)
@@ -662,5 +682,128 @@ func TestOnlyTheRepositoriesTableIsSortable(t *testing.T) {
 	body := ts.get(t, "/?period=12m").Body.String()
 	if strings.Contains(body, `aria-sort=`) {
 		t.Error("the dashboard should not advertise sortable headers")
+	}
+}
+
+func TestTeamFilterIsOfferedOnBothPages(t *testing.T) {
+	ts := newTestServer(t)
+	for _, path := range []string{"/contributors", "/repositories"} {
+		body := ts.get(t, path+"?period=12m").Body.String()
+		if !strings.Contains(body, "All teams") {
+			t.Errorf("%s does not offer the team filter", path)
+		}
+		for _, slug := range []string{"platform", "design"} {
+			if !strings.Contains(body, "team="+slug) {
+				t.Errorf("%s does not list the %q team", path, slug)
+			}
+		}
+	}
+	// The dashboard is deliberately organization-wide.
+	if strings.Contains(ts.get(t, "/?period=12m").Body.String(), "All teams") {
+		t.Error("the dashboard should not advertise a team filter it does not apply")
+	}
+}
+
+func TestTeamFilterScopesEachPage(t *testing.T) {
+	ts := newTestServer(t)
+
+	// platform owns the api repository and alice; design owns neither.
+	platform := ts.get(t, "/repositories?period=12m&team=platform").Body.String()
+	if !strings.Contains(platform, ">api<") {
+		t.Error("the platform team should list its api repository")
+	}
+	if strings.Contains(platform, ">legacy<") {
+		t.Error("a repository outside the team is still listed")
+	}
+
+	design := ts.get(t, "/repositories?period=12m&team=design").Body.String()
+	if strings.Contains(design, ">api<") {
+		t.Error("the design team has no repositories but api is listed")
+	}
+	if !strings.Contains(design, "access to no imported repositories") {
+		t.Error("an empty team should explain itself rather than look broken")
+	}
+
+	contributors := ts.get(t, "/contributors?period=12m&team=design").Body.String()
+	if strings.Contains(contributors, "@alice") {
+		t.Error("alice is not a member of design but appears in its ranking")
+	}
+	if !strings.Contains(contributors, "No members of this team were active") {
+		t.Error("an empty team ranking should explain itself")
+	}
+	if !strings.Contains(ts.get(t, "/contributors?period=12m&team=platform").Body.String(), "@alice") {
+		t.Error("alice is a member of platform but is missing from its ranking")
+	}
+
+	if *ts.githubHits != 0 {
+		t.Fatal("filtering by team must not call GitHub")
+	}
+}
+
+func TestTeamFilterSurvivesSortingAndPeriodChanges(t *testing.T) {
+	ts := newTestServer(t)
+
+	body := ts.get(t, "/contributors?period=3m&team=platform&sort=approvals").Body.String()
+	if !strings.Contains(body, `<input type="hidden" name="team" value="platform">`) {
+		t.Error("the period picker drops the team filter")
+	}
+	// Sort links keep the team.
+	if !strings.Contains(body, "team=platform") || !strings.Contains(body, "sort=commits") {
+		t.Error("the sort menu drops the team filter")
+	}
+
+	repos := ts.get(t, "/repositories?period=3m&team=platform&sort=reviews&dir=asc").Body.String()
+	if !strings.Contains(repos, `<input type="hidden" name="team" value="platform">`) {
+		t.Error("the repositories period picker drops the team filter")
+	}
+	for _, q := range headerHrefs(t, repos) {
+		if q.Get("team") != "platform" {
+			t.Errorf("the %q header link drops the team filter: %v", q.Get("sort"), q)
+		}
+	}
+}
+
+func TestUnknownTeamDegradesToTheFullView(t *testing.T) {
+	ts := newTestServer(t)
+	// A renamed or deleted team should not 404 a shared link.
+	for _, path := range []string{"/contributors", "/repositories"} {
+		w := ts.get(t, path+"?period=12m&team=does-not-exist")
+		if w.Code != http.StatusOK {
+			t.Errorf("%s with an unknown team = %d, want 200", path, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "All teams") {
+			t.Errorf("%s with an unknown team did not fall back to the full view", path)
+		}
+	}
+	if !strings.Contains(ts.get(t, "/repositories?period=12m&team=does-not-exist").Body.String(), ">legacy<") {
+		t.Error("the unfiltered repository list should be shown for an unknown team")
+	}
+}
+
+func TestReportStaysOrganizationWide(t *testing.T) {
+	ts := newTestServer(t)
+	// The report is documented as organization-wide, so its link must not carry
+	// a team the report would then ignore.
+	body := ts.get(t, "/contributors?period=3m&team=platform").Body.String()
+	idx := strings.Index(body, "/report.pdf?")
+	if idx < 0 {
+		t.Fatal("no report link on the page")
+	}
+	link := body[idx : idx+strings.Index(body[idx:], `"`)]
+	if strings.Contains(link, "team=") {
+		t.Errorf("the report link carries a team filter it does not apply: %s", link)
+	}
+
+	w := ts.get(t, "/report.pdf?period=12m&team=platform")
+	if w.Code != http.StatusOK || !bytes.HasPrefix(w.Body.Bytes(), []byte("%PDF-")) {
+		t.Errorf("/report.pdf with a team parameter = %d", w.Code)
+	}
+}
+
+func TestStatusPageReportsTeams(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/status").Body.String()
+	if !strings.Contains(body, "Teams") {
+		t.Error("the status page does not report the team count")
 	}
 }

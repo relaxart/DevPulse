@@ -1015,3 +1015,279 @@ func TestRepositoryRankingIgnoresAnInjectedSortKey(t *testing.T) {
 		t.Fatal("the repositories table disappeared: the sort key reached SQL")
 	}
 }
+
+func mustTeam(t *testing.T, db *DB, org *models.Organization, githubID, slug, name string) int64 {
+	t.Helper()
+	id, err := db.UpsertTeam(context.Background(), &models.Team{
+		OrganizationID: org.ID, GitHubID: githubID, Slug: slug, Name: name,
+	})
+	if err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	return id
+}
+
+func TestTeamPersistenceIsIdempotentAndReplacesMembership(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	repoA := mustRepo(t, db, org, "R_a", "api", false)
+	repoB := mustRepo(t, db, org, "R_b", "web", false)
+	alice := mustContributor(t, db, "U_alice", "alice", false)
+	bob := mustContributor(t, db, "U_bob", "bob", false)
+
+	teamID := mustTeam(t, db, org, "T_1", "platform", "Platform")
+
+	// Re-importing the same team must not create a second row.
+	if again := mustTeam(t, db, org, "T_1", "platform", "Platform Team"); again != teamID {
+		t.Errorf("re-import created a new team id %d, want %d", again, teamID)
+	}
+	if got := countRows(t, db, "teams"); got != 1 {
+		t.Errorf("teams = %d rows, want 1", got)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := db.ReplaceTeamMembers(ctx, org.ID, teamID, []int64{alice, bob}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.ReplaceTeamRepositories(ctx, org.ID, teamID, []int64{repoA, repoB}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := countRows(t, db, "team_members"); got != 2 {
+		t.Errorf("team_members = %d rows after repeats, want 2", got)
+	}
+	if got := countRows(t, db, "team_repositories"); got != 2 {
+		t.Errorf("team_repositories = %d rows after repeats, want 2", got)
+	}
+
+	// Bob leaves and repoB is unassigned: the stored set must shrink.
+	if err := db.ReplaceTeamMembers(ctx, org.ID, teamID, []int64{alice}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceTeamRepositories(ctx, org.ID, teamID, []int64{repoA}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, db, "team_members"); got != 1 {
+		t.Errorf("team_members = %d, want 1: membership must be replaced, not merged", got)
+	}
+	if got := countRows(t, db, "team_repositories"); got != 1 {
+		t.Errorf("team_repositories = %d, want 1", got)
+	}
+
+	// An empty set clears the team without deleting it.
+	if err := db.ReplaceTeamMembers(ctx, org.ID, teamID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, db, "team_members"); got != 0 {
+		t.Errorf("team_members = %d, want 0", got)
+	}
+	if got := countRows(t, db, "teams"); got != 1 {
+		t.Error("clearing membership must not delete the team")
+	}
+}
+
+func TestListAndResolveTeams(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	repo := mustRepo(t, db, org, "R_a", "api", false)
+	alice := mustContributor(t, db, "U_alice", "alice", false)
+
+	platform := mustTeam(t, db, org, "T_1", "platform", "Platform")
+	mustTeam(t, db, org, "T_2", "design", "Design")
+	if err := db.ReplaceTeamMembers(ctx, org.ID, platform, []int64{alice}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceTeamRepositories(ctx, org.ID, platform, []int64{repo}); err != nil {
+		t.Fatal(err)
+	}
+
+	teams, err := db.ListTeams(ctx, org.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(teams) != 2 {
+		t.Fatalf("listed %d teams, want 2", len(teams))
+	}
+	// Ordered by display name: Design before Platform.
+	if teams[0].Name != "Design" {
+		t.Errorf("teams are not ordered by name: %s first", teams[0].Name)
+	}
+	for _, team := range teams {
+		if team.Slug == "platform" {
+			if team.MemberCount != 1 || team.RepositoryCount != 1 {
+				t.Errorf("platform counts = %d members / %d repos, want 1/1",
+					team.MemberCount, team.RepositoryCount)
+			}
+		}
+	}
+
+	found, err := db.TeamBySlug(ctx, org.ID, "PLATFORM")
+	if err != nil || found == nil {
+		t.Fatalf("TeamBySlug is case sensitive: %v %v", found, err)
+	}
+	missing, err := db.TeamBySlug(ctx, org.ID, "nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing != nil {
+		t.Error("an unknown slug must resolve to nil, not an error")
+	}
+
+	if n, err := db.CountTeams(ctx, org.ID); err != nil || n != 2 {
+		t.Errorf("CountTeams = %d, %v", n, err)
+	}
+}
+
+func TestDeleteTeamsNotIn(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	keep := mustTeam(t, db, org, "T_1", "platform", "Platform")
+	mustTeam(t, db, org, "T_2", "design", "Design")
+	alice := mustContributor(t, db, "U_alice", "alice", false)
+	if err := db.ReplaceTeamMembers(ctx, org.ID, keep, []int64{alice}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := db.DeleteTeamsNotIn(ctx, org.ID, []string{"T_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Errorf("removed %d teams, want 1", removed)
+	}
+	if got := countRows(t, db, "teams"); got != 1 {
+		t.Errorf("teams = %d, want 1", got)
+	}
+	// The surviving team keeps its membership.
+	if got := countRows(t, db, "team_members"); got != 1 {
+		t.Errorf("team_members = %d, want 1", got)
+	}
+
+	// An organization whose teams all disappeared ends up with none.
+	if _, err := db.DeleteTeamsNotIn(ctx, org.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, db, "teams"); got != 0 {
+		t.Errorf("teams = %d, want 0", got)
+	}
+}
+
+func TestTeamFilterScopesContributorsAndRepositories(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	teamRepo := mustRepo(t, db, org, "R_a", "api", false)
+	otherRepo := mustRepo(t, db, org, "R_b", "marketing-site", false)
+
+	alice := mustContributor(t, db, "U_alice", "alice", false) // team member
+	bob := mustContributor(t, db, "U_bob", "bob", false)       // team member
+	mallory := mustContributor(t, db, "U_m", "mallory", false) // not a member
+
+	// Alice works in both repositories, bob only in the team's repository, and
+	// mallory only outside it.
+	mustCommit(t, db, org.ID, teamRepo, &alice, "c1", day(2), 10, 1, 1)
+	mustCommit(t, db, org.ID, otherRepo, &alice, "c2", day(3), 20, 2, 2)
+	mustCommit(t, db, org.ID, teamRepo, &bob, "c3", day(2), 5, 1, 1)
+	mustCommit(t, db, org.ID, otherRepo, &mallory, "c4", day(2), 90, 9, 9)
+	rebuild(t, db, org.ID, []int64{teamRepo, otherRepo})
+
+	teamID := mustTeam(t, db, org, "T_1", "platform", "Platform")
+	if err := db.ReplaceTeamMembers(ctx, org.ID, teamID, []int64{alice, bob}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceTeamRepositories(ctx, org.ID, teamID, []int64{teamRepo}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := fullRange()
+	f.OrganizationID = org.ID
+
+	// Unfiltered: everybody and every repository.
+	all, err := db.ContributorRanking(ctx, f, "commits", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("unfiltered ranking has %d rows, want 3", len(all))
+	}
+
+	f.TeamID = &teamID
+	members, err := db.ContributorRanking(ctx, f, "commits", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("team ranking has %d rows, want the 2 members", len(members))
+	}
+	for _, row := range members {
+		if row.Login == "mallory" {
+			t.Error("a non-member appears in the team ranking")
+		}
+	}
+	// Membership scopes the people, not their repositories: alice's work in the
+	// non-team repository still counts.
+	for _, row := range members {
+		if row.Login == "alice" && row.Commits != 2 {
+			t.Errorf("alice has %d commits under the team filter, want both of them", row.Commits)
+		}
+	}
+
+	repos, err := db.RepositoryRanking(ctx, f, metrics.DefaultRepositorySort, metrics.SortDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Name != "api" {
+		t.Fatalf("team repository list = %+v, want only api", repos)
+	}
+	// The repository's own figures still cover every contributor.
+	if repos[0].Commits != 2 {
+		t.Errorf("api shows %d commits under the team filter, want 2 from all contributors", repos[0].Commits)
+	}
+
+	// Clearing the filter restores the full view without re-synchronizing.
+	f.TeamID = nil
+	repos, err = db.RepositoryRanking(ctx, f, metrics.DefaultRepositorySort, metrics.SortDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 2 {
+		t.Errorf("unfiltered repository list has %d rows, want 2", len(repos))
+	}
+}
+
+func TestTeamFilterCannotReachAcrossOrganizations(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	a, b := seedTwoOrganizations(t, db)
+
+	// A team in org-a whose id is used against org-b must yield nothing.
+	teamID := mustTeam(t, db, a, "T_a", "platform", "Platform")
+	var aliceID int64
+	if err := db.Pool.QueryRow(ctx, `SELECT id FROM contributors WHERE login = 'alice'`).Scan(&aliceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceTeamMembers(ctx, a.ID, teamID, []int64{aliceID}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := fullRange()
+	f.OrganizationID = b.ID
+	f.TeamID = &teamID
+
+	rows, err := db.ContributorRanking(ctx, f, "commits", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a team of another organization returned %d contributors, want none", len(rows))
+	}
+
+	// Its own organization still sees it.
+	f.OrganizationID = a.ID
+	if rows, err = db.ContributorRanking(ctx, f, "commits", 50, 0); err != nil || len(rows) != 1 {
+		t.Errorf("org-a team ranking = %d rows, %v", len(rows), err)
+	}
+}

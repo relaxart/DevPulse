@@ -48,6 +48,31 @@ type Contributor struct {
 	IsBot     bool
 }
 
+// Team is a GitHub organization team. GitHub calls these "teams"; they are what
+// most people mean by a group.
+type Team struct {
+	ID             int64
+	OrganizationID int64
+	GitHubID       string
+	Slug           string
+	Name           string
+	Description    string
+	URL            string
+	Privacy        string
+
+	// Counts are filled in by listing queries, not by the collector.
+	MemberCount     int64
+	RepositoryCount int64
+}
+
+// DisplayName prefers the human name and falls back to the slug.
+func (t Team) DisplayName() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return t.Slug
+}
+
 // Commit is one commit on a repository's default branch.
 type Commit struct {
 	OrganizationID int64

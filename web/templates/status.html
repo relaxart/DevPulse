@@ -80,6 +80,8 @@
         <dl class="status-list mb-0">
           <dt>Repositories</dt><dd>{{num .Counts.Repositories}} <span class="text-body-secondary small">({{num .Counts.ArchivedRepositories}} archived)</span></dd>
           <dt>Contributors</dt><dd>{{num .Counts.Contributors}}</dd>
+          <dt>Teams</dt>
+          <dd>{{if .SyncTeams}}{{num .TeamCount}}{{else}}<span class="text-body-secondary">not synchronized (<code>SYNC_TEAMS=false</code>)</span>{{end}}</dd>
           <dt>Commits</dt><dd>{{num .Counts.Commits}}</dd>
           <dt>Pull requests</dt><dd>{{num .Counts.PullRequests}}</dd>
           <dt>Reviews</dt><dd>{{num .Counts.Reviews}}</dd>

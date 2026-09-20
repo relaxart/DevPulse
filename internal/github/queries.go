@@ -111,6 +111,133 @@ func (c *Client) FetchRepositories(ctx context.Context, login string, pageSize i
 	}, nil
 }
 
+// teamMemberFields selects a team member. Team members are concrete Users, so
+// unlike a pull request author they can select id and name directly.
+const teamMemberFields = `__typename id login name avatarUrl url`
+
+const teamsQuery = `
+query DevPulseTeams($login: String!, $first: Int!, $after: String, $members: Int!, $repos: Int!) {
+  organization(login: $login) {
+    teams(first: $first, after: $after, orderBy: {field: NAME, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        slug
+        name
+        description
+        url
+        privacy
+        members(first: $members) {
+          pageInfo { hasNextPage endCursor }
+          nodes { ` + teamMemberFields + ` }
+        }
+        repositories(first: $repos) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id name nameWithOwner }
+        }
+      }
+    }
+  }` + rateLimitFragment + `
+}`
+
+// FetchTeams returns one page of the configured organization's teams, each with
+// its first page of members and repositories.
+func (c *Client) FetchTeams(ctx context.Context, login string, pageSize, memberPageSize, repoPageSize int, after string) (*Page[Team], error) {
+	var out struct {
+		Organization *struct {
+			Teams struct {
+				PageInfo PageInfo `json:"pageInfo"`
+				Nodes    []Team   `json:"nodes"`
+			} `json:"teams"`
+		} `json:"organization"`
+	}
+	vars := map[string]any{
+		"login":   login,
+		"first":   pageSize,
+		"after":   cursor(after),
+		"members": memberPageSize,
+		"repos":   repoPageSize,
+	}
+	if err := c.do(ctx, "teams", teamsQuery, vars, &out); err != nil {
+		return nil, err
+	}
+	if out.Organization == nil {
+		return nil, fmt.Errorf("%w: organization %q", ErrNotFound, login)
+	}
+	t := out.Organization.Teams
+	return &Page[Team]{Nodes: t.Nodes, PageInfo: t.PageInfo}, nil
+}
+
+const teamMembersQuery = `
+query DevPulseTeamMembers($login: String!, $slug: String!, $first: Int!, $after: String) {
+  organization(login: $login) {
+    team(slug: $slug) {
+      members(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ` + teamMemberFields + ` }
+      }
+    }
+  }` + rateLimitFragment + `
+}`
+
+// FetchTeamMembers pages the members of a single team.
+func (c *Client) FetchTeamMembers(ctx context.Context, login, slug string, pageSize int, after string) (*Page[Actor], error) {
+	var out struct {
+		Organization *struct {
+			Team *struct {
+				Members struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Actor  `json:"nodes"`
+				} `json:"members"`
+			} `json:"team"`
+		} `json:"organization"`
+	}
+	vars := map[string]any{"login": login, "slug": slug, "first": pageSize, "after": cursor(after)}
+	if err := c.do(ctx, "teamMembers", teamMembersQuery, vars, &out); err != nil {
+		return nil, err
+	}
+	if out.Organization == nil || out.Organization.Team == nil {
+		return nil, fmt.Errorf("%w: team %s/%s", ErrNotFound, login, slug)
+	}
+	m := out.Organization.Team.Members
+	return &Page[Actor]{Nodes: m.Nodes, PageInfo: m.PageInfo}, nil
+}
+
+const teamRepositoriesQuery = `
+query DevPulseTeamRepositories($login: String!, $slug: String!, $first: Int!, $after: String) {
+  organization(login: $login) {
+    team(slug: $slug) {
+      repositories(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id name nameWithOwner }
+      }
+    }
+  }` + rateLimitFragment + `
+}`
+
+// FetchTeamRepositories pages the repositories a single team has access to.
+func (c *Client) FetchTeamRepositories(ctx context.Context, login, slug string, pageSize int, after string) (*Page[TeamRepository], error) {
+	var out struct {
+		Organization *struct {
+			Team *struct {
+				Repositories struct {
+					PageInfo PageInfo         `json:"pageInfo"`
+					Nodes    []TeamRepository `json:"nodes"`
+				} `json:"repositories"`
+			} `json:"team"`
+		} `json:"organization"`
+	}
+	vars := map[string]any{"login": login, "slug": slug, "first": pageSize, "after": cursor(after)}
+	if err := c.do(ctx, "teamRepositories", teamRepositoriesQuery, vars, &out); err != nil {
+		return nil, err
+	}
+	if out.Organization == nil || out.Organization.Team == nil {
+		return nil, fmt.Errorf("%w: team %s/%s", ErrNotFound, login, slug)
+	}
+	r := out.Organization.Team.Repositories
+	return &Page[TeamRepository]{Nodes: r.Nodes, PageInfo: r.PageInfo}, nil
+}
+
 const commitsQuery = `
 query DevPulseCommits($owner: String!, $name: String!, $since: GitTimestamp!, $until: GitTimestamp, $first: Int!, $after: String) {
   repository(owner: $owner, name: $name) {

@@ -25,6 +25,9 @@ type Config struct {
 	HistoryMonths int
 
 	IncludeArchived bool
+	// SyncTeams imports organization teams and their membership. It needs the
+	// read:org scope; turn it off for a token that does not have it.
+	SyncTeams bool
 	// ExcludedUsers holds lower-cased logins excluded from rankings.
 	ExcludedUsers []string
 
@@ -70,6 +73,7 @@ func FromEnv(get func(string) string) (*Config, error) {
 		SyncOnStartup:   true,
 		LogLevel:        "info",
 		IncludeArchived: false,
+		SyncTeams:       true,
 	}
 
 	var errs []string
@@ -115,6 +119,15 @@ func FromEnv(get func(string) string) (*Config, error) {
 			errs = append(errs, fmt.Sprintf("INCLUDE_ARCHIVED is not a boolean (%q)", v))
 		} else {
 			cfg.IncludeArchived = b
+		}
+	}
+
+	if v := strings.TrimSpace(get("SYNC_TEAMS")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("SYNC_TEAMS is not a boolean (%q)", v))
+		} else {
+			cfg.SyncTeams = b
 		}
 	}
 
@@ -192,6 +205,7 @@ func (c *Config) Redacted() map[string]any {
 		"sync_interval":    c.SyncInterval.String(),
 		"history_months":   c.HistoryMonths,
 		"include_archived": c.IncludeArchived,
+		"sync_teams":       c.SyncTeams,
 		"excluded_users":   c.ExcludedUsers,
 		"listen_addr":      c.ListenAddr,
 		"min_rate_limit":   c.MinRateLimit,

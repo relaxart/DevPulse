@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/relaxart/dev-pulse/internal/database"
@@ -43,6 +44,40 @@ type pageContext struct {
 	Layout layoutData
 	Org    *models.Organization
 	Filter database.Filter
+	// Team is the resolved ?team= selection, nil when unfiltered.
+	Team *models.Team
+	// Teams is the organization's team list, for the filter menu.
+	Teams []models.Team
+}
+
+// resolveTeam loads the team list and the current selection. A team filter is
+// only offered on the pages that support it, so callers opt in.
+func (s *Server) resolveTeam(r *http.Request, pc *pageContext) error {
+	if pc.Org == nil {
+		return nil
+	}
+	teams, err := s.db.ListTeams(r.Context(), pc.Org.ID)
+	if err != nil {
+		return err
+	}
+	pc.Teams = teams
+
+	slug := strings.TrimSpace(r.URL.Query().Get("team"))
+	if slug == "" {
+		return nil
+	}
+	// An unknown slug degrades to the unfiltered view rather than erroring: a
+	// team can be renamed or deleted after a link was shared.
+	team, err := s.db.TeamBySlug(r.Context(), pc.Org.ID, slug)
+	if err != nil {
+		return err
+	}
+	if team == nil {
+		return nil
+	}
+	pc.Team = team
+	pc.Filter.TeamID = &team.ID
+	return nil
 }
 
 func (s *Server) context(w http.ResponseWriter, r *http.Request, nav string) (*pageContext, bool) {
@@ -225,6 +260,8 @@ type contributorsView struct {
 	NextPage        int
 	HasNext         bool
 	IncludeArchived bool
+	Teams           []models.Team
+	Team            *models.Team
 }
 
 func (s *Server) handleContributors(w http.ResponseWriter, r *http.Request) {
@@ -246,9 +283,19 @@ func (s *Server) handleContributors(w http.ResponseWriter, r *http.Request) {
 	view.PrevPage = view.Page - 1
 	view.NextPage = view.Page + 1
 	view.Title = "Contributors"
-	// Keep the sort selection in every link on the page.
+
+	if err := s.resolveTeam(r, pc); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	view.Teams, view.Team = pc.Teams, pc.Team
+
+	// Keep the sort and team selections in every link on the page.
 	view.Query = cloneValues(pc.Layout.Range.Query())
 	view.Query.Set("sort", view.Sort.Key)
+	if pc.Team != nil {
+		view.Query.Set("team", pc.Team.Slug)
+	}
 
 	if pc.Org == nil {
 		s.render(w, r, http.StatusOK, "contributors.html", view)
@@ -356,6 +403,8 @@ type repositoriesView struct {
 	SortDir         string
 	SortLabel       string
 	IncludeArchived bool
+	Teams           []models.Team
+	Team            *models.Team
 }
 
 func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
@@ -372,11 +421,22 @@ func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
 		SortKey:         col.Key,
 		SortDir:         dir,
 		SortLabel:       col.Label,
-		Headers:         repositoryHeaders(pc.Layout.Range.Query(), col.Key, dir),
 	}
 	view.Title = "Repositories"
-	// Keep the chosen column in the period picker and the navigation links.
-	view.Query = cloneValues(pc.Layout.Range.Query())
+
+	if err := s.resolveTeam(r, pc); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	view.Teams, view.Team = pc.Teams, pc.Team
+
+	// Keep the chosen column and team in the period picker and the navigation.
+	base := cloneValues(pc.Layout.Range.Query())
+	if pc.Team != nil {
+		base.Set("team", pc.Team.Slug)
+	}
+	view.Headers = repositoryHeaders(base, col.Key, dir)
+	view.Query = cloneValues(base)
 	view.Query.Set("sort", col.Key)
 	view.Query.Set("dir", dir)
 
@@ -503,6 +563,8 @@ func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
 type statusView struct {
 	layoutData
 	Counts          database.Counts
+	TeamCount       int64
+	SyncTeams       bool
 	LastRun         *models.SyncRun
 	LastSuccess     *models.SyncRun
 	Runs            []models.SyncRun
@@ -537,6 +599,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	view := statusView{
 		layoutData:      pc.Layout,
 		SyncInterval:    s.cfg.SyncInterval.String(),
+		SyncTeams:       s.cfg.SyncTeams,
 		HistoryMonths:   s.cfg.HistoryMonths,
 		IncludeArchived: s.cfg.IncludeArchived,
 		ExcludedUsers:   s.cfg.ExcludedUsers,
@@ -577,6 +640,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if view.Runs, err = s.db.RecentSyncRuns(ctx, pc.Org.ID, 15); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		if view.TeamCount, err = s.db.CountTeams(ctx, pc.Org.ID); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
