@@ -537,22 +537,25 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Before the first successful synchronization there is no organization row
+	// and nothing to query. Produce an empty but valid report that says so,
+	// rather than a 404: every other page renders in that state too.
+	var data *report.Data
 	if pc.Org == nil {
-		s.notFound(w, r, pc.Layout,
-			"There is nothing to report yet - the first synchronization has not produced any data.")
-		return
-	}
-
-	data, err := report.Collect(r.Context(), s.db, report.Request{
-		Organization: s.cfg.GitHubOrg,
-		Filter:       pc.Filter,
-		Range:        pc.Layout.Range,
-		SortKey:      r.URL.Query().Get("sort"),
-		LastSync:     pc.Org.LastSyncedAt,
-	})
-	if err != nil {
-		s.serverError(w, r, err)
-		return
+		data = report.Empty(s.cfg.GitHubOrg, pc.Layout.Range)
+	} else {
+		var err error
+		data, err = report.Collect(r.Context(), s.db, report.Request{
+			Organization: s.cfg.GitHubOrg,
+			Filter:       pc.Filter,
+			Range:        pc.Layout.Range,
+			SortKey:      r.URL.Query().Get("sort"),
+			LastSync:     pc.Org.LastSyncedAt,
+		})
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
 
 	pdf, err := report.Render(data)

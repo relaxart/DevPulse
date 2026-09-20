@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# The workflow needs nothing but the source; it never touches the GitHub API
+# beyond checkout, and it needs no secrets, so pull requests from forks work.
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes the run already in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The PostgreSQL integration tests skip themselves when TEST_DATABASE_URL is
+    # unset. CI provides a real database so they actually run.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: devpulse
+          POSTGRES_PASSWORD: devpulse
+          POSTGRES_DB: devpulse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devpulse -d devpulse_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted. Run 'gofmt -w .':"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+          echo "All files are gofmt-formatted."
+
+      - name: Check that go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          if ! git diff --quiet --exit-code go.mod go.sum; then
+            echo "::error::go.mod or go.sum is out of date. Run 'go mod tidy' and commit the result."
+            git diff go.mod go.sum
+            exit 1
+          fi
+          echo "Module files are tidy."
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        env:
+          # Enables the PostgreSQL integration tests in internal/database and
+          # internal/http instead of letting them skip.
+          TEST_DATABASE_URL: postgres://devpulse:devpulse@localhost:5432/devpulse_test?sslmode=disable
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            go tool cover -func=coverage.out | tail -1
+          fi
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    name: Docker image and stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Validate the Compose configuration
+        run: |
+          # `docker compose config` needs the env file to exist; the example
+          # values are placeholders and nothing is started by this step.
+          cp .env.example .env
+          docker compose config -q
+          echo "Compose configuration is valid."
+
+      - name: Write the smoke-test environment
+        run: |
+          # A placeholder token makes synchronization fail with 401, which is
+          # deliberate: the web application must keep serving regardless.
+          printf '%s\n' \
+            'GITHUB_TOKEN=placeholder-not-a-real-token' \
+            'GITHUB_ORG=devpulse-ci-smoke-test' \
+            'SYNC_INTERVAL=30m' \
+            'HISTORY_MONTHS=1' > .env
+
+      - name: Build the image
+        env:
+          VERSION: ci-${{ github.sha }}
+        run: docker compose build
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for the application to become healthy
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              echo "Healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The application never became healthy."
+          exit 1
+
+      - name: Smoke test the running application
+        run: |
+          set -euo pipefail
+
+          echo "--- /health ---"
+          curl -fsS http://localhost:8080/health
+          echo
+          echo "--- /ready ---"
+          curl -fsS http://localhost:8080/ready
+          echo
+
+          # Migrations must have been applied before requests are served.
+          curl -fsS http://localhost:8080/ready | grep -q 'schema_version' \
+            || { echo "::error::/ready does not report a schema version"; exit 1; }
+
+          echo "--- pages ---"
+          for path in "/" "/contributors" "/repositories" "/status" \
+                      "/contributors?period=7d" "/repositories?period=custom&from=2026-01-01&to=2026-03-31"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080${path}")
+            printf '%-70s %s\n' "${path}" "${code}"
+            [ "${code}" = "200" ] || { echo "::error::${path} returned ${code}"; exit 1; }
+          done
+
+          echo "--- PDF report ---"
+          curl -fsS -o report.pdf "http://localhost:8080/report.pdf?period=30d"
+          head -c 5 report.pdf | grep -q '%PDF-' \
+            || { echo "::error::/report.pdf did not return a PDF"; exit 1; }
+          echo "report.pdf is $(wc -c < report.pdf) bytes"
+
+      - name: Check that the token never leaks into the logs
+        run: |
+          if docker compose logs 2>&1 | grep -q 'placeholder-not-a-real-token'; then
+            echo "::error::The GitHub token appeared in the application logs."
+            exit 1
+          fi
+          echo "The token does not appear in any log line."
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

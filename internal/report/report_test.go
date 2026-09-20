@@ -415,3 +415,26 @@ func TestDiffCountersRenderZeroPlainly(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyReportIsStillAValidDocument(t *testing.T) {
+	rng, _ := metrics.ResolveRange(metrics.Period30d, "", "", time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC))
+	data := Empty("acme", rng)
+
+	if !data.NoData {
+		t.Error("an unsynchronized report must be flagged, so it is not mistaken for a quiet period")
+	}
+	if data.Sort.Key != metrics.DefaultSort {
+		t.Errorf("Sort = %q, want the default", data.Sort.Key)
+	}
+	if !strings.HasPrefix(data.Filename(), "devpulse-acme-") {
+		t.Errorf("Filename() = %q", data.Filename())
+	}
+
+	out, err := Render(data)
+	if err != nil {
+		t.Fatalf("an empty report must still render: %v", err)
+	}
+	if !bytes.HasPrefix(out, []byte("%PDF-")) {
+		t.Error("the empty report is not a PDF")
+	}
+}

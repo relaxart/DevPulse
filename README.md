@@ -1,5 +1,7 @@
 # DevPulse
 
+[![CI](https://github.com/relaxart/dev-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/relaxart/dev-pulse/actions/workflows/ci.yml)
+
 GitHub engineering analytics for **one** organization.
 
 DevPulse collects commits, pull requests and reviews from the GitHub GraphQL
@@ -473,6 +475,9 @@ Reports are built from the same PostgreSQL aggregates as the dashboard, honour
 
 The file is named `devpulse-<org>-<from>-to-<to>.pdf`.
 
+Before the first successful synchronization the report is still a valid document;
+it renders empty and says so, rather than returning an error.
+
 ### Limitation
 
 The PDF uses the standard built-in fonts, which cover Latin-1. A display name in
@@ -689,6 +694,25 @@ generation for every period (including table widths that must fit the page), and
 an end-to-end check that neither rendering a page nor generating a report ever
 calls GitHub. Collector tests run
 against recorded GraphQL responses — no network access required.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request against `main`, and can be
+started by hand from the Actions tab. It needs no secrets, so pull requests from
+forks work.
+
+**Go tests** — `gofmt` check, `go mod tidy` check (fails if `go.mod`/`go.sum`
+would change), `go build`, `go vet`, then `go test -race` against a PostgreSQL
+service container, so the integration tests actually run instead of skipping.
+The coverage profile is uploaded as a build artifact.
+
+**Docker image and stack** — validates `docker compose config`, builds the image,
+starts the full stack with a placeholder token and checks that `/health` and
+`/ready` answer, that `/ready` reports an applied schema version, that every page
+and a PDF report return `200`, and that the token never appears in the container
+logs. The placeholder token makes synchronization fail on purpose: the web
+application must keep serving regardless. Container logs are dumped if anything
+fails.
 
 Building the image:
 

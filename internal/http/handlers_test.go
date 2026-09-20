@@ -456,3 +456,29 @@ func TestReportMenuIsOfferedOnEveryPage(t *testing.T) {
 		t.Error("the report link should preserve the selected sort key")
 	}
 }
+
+// A deployment whose first synchronization has not produced data yet must still
+// return a readable report rather than a 404: every other page renders in that
+// state, and a fresh install is exactly when someone clicks around.
+func TestReportBeforeTheFirstSyncIsAnEmptyDocumentNotAnError(t *testing.T) {
+	ts := newTestServer(t)
+	if _, err := ts.db.Pool.Exec(context.Background(),
+		`TRUNCATE contributor_daily_stats, pull_request_reviews, pull_requests, commits,
+		          repositories, contributors, sync_runs, organizations RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+
+	w := ts.get(t, "/report.pdf?period=30d")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /report.pdf on an unsynchronized instance = %d, want 200", w.Code)
+	}
+	if !bytes.HasPrefix(w.Body.Bytes(), []byte("%PDF-")) {
+		t.Error("an unsynchronized instance did not return a PDF")
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if *ts.githubHits != 0 {
+		t.Fatal("an empty report must not reach for GitHub to fill itself in")
+	}
+}

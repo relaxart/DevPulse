@@ -130,6 +130,15 @@ func (r *renderer) title() {
 			"", 1, "L", false, 0, "")
 	}
 
+	if r.data.NoData {
+		p.SetFont(fontFamily, "B", 9)
+		r.setColor(colorDel)
+		p.CellFormat(contentW, 5,
+			"No data has been synchronized yet, so this report is empty. "+
+				"Check the status page for synchronization errors.",
+			"", 1, "L", false, 0, "")
+	}
+
 	p.Ln(2)
 	r.rule()
 	p.Ln(3)
