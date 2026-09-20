@@ -21,7 +21,7 @@ type Store interface {
 	Overview(ctx context.Context, f database.Filter) (models.OverviewStats, error)
 	TimeSeries(ctx context.Context, f database.Filter, g metrics.Granularity, contributorID, repositoryID *int64) ([]models.TimePoint, error)
 	ContributorRanking(ctx context.Context, f database.Filter, sortKey string, limit, offset int) ([]models.ContributorStats, error)
-	RepositoryRanking(ctx context.Context, f database.Filter) ([]models.RepositoryStats, error)
+	RepositoryRanking(ctx context.Context, f database.Filter, sortKey, sortDir string) ([]models.RepositoryStats, error)
 }
 
 // Request describes the report to produce.
@@ -137,7 +137,10 @@ func Collect(ctx context.Context, store Store, req Request) (*Data, error) {
 	}
 	d.Contributors = contributors
 
-	repositories, err := store.RepositoryRanking(ctx, req.Filter)
+	// The report always lists repositories by activity; the table header sort is
+	// an on-screen affordance.
+	repositories, err := store.RepositoryRanking(ctx, req.Filter,
+		metrics.DefaultRepositorySort, metrics.SortDesc)
 	if err != nil {
 		return nil, fmt.Errorf("report repository ranking: %w", err)
 	}

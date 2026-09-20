@@ -317,10 +317,18 @@ SELECT r.id, r.organization_id, r.github_id, r.name, r.full_name, r.url, r.descr
  WHERE r.organization_id = $1
    AND ($4 OR NOT r.is_archived)`
 
-// RepositoryRanking returns repository rows for the repositories page.
-func (db *DB) RepositoryRanking(ctx context.Context, f Filter) ([]models.RepositoryStats, error) {
-	q := repositoryStatsSQL + `
- ORDER BY COALESCE(stats.commits, 0) DESC, COALESCE(stats.prs_opened, 0) DESC, lower(r.name) ASC`
+// RepositoryRanking returns repository rows for the repositories page, ordered
+// by one column.
+//
+// sortKey and sortDir are resolved through the metrics allow-list, so the
+// ORDER BY clause can only ever contain a known column reference and one of two
+// direction keywords.
+func (db *DB) RepositoryRanking(ctx context.Context, f Filter, sortKey, sortDir string) ([]models.RepositoryStats, error) {
+	col, dir := metrics.ResolveRepositorySort(sortKey, sortDir)
+	// Repositories with no activity in the period sort last either way, rather
+	// than jumping to the top of an ascending sort.
+	q := repositoryStatsSQL + fmt.Sprintf(
+		"\n ORDER BY %s %s NULLS LAST, lower(r.name) ASC", col.SortExpr, metrics.SQLDirection(dir))
 
 	rows, err := db.Pool.Query(ctx, q, f.args()...)
 	if err != nil {

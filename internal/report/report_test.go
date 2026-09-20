@@ -57,7 +57,7 @@ func (f *fakeStore) ContributorRanking(ctx context.Context, filter database.Filt
 	return f.contributors, nil
 }
 
-func (f *fakeStore) RepositoryRanking(ctx context.Context, filter database.Filter) ([]models.RepositoryStats, error) {
+func (f *fakeStore) RepositoryRanking(ctx context.Context, filter database.Filter, sortKey, sortDir string) ([]models.RepositoryStats, error) {
 	f.filters = append(f.filters, filter)
 	return f.repositories, f.err
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/relaxart/dev-pulse/internal/config"
 	"github.com/relaxart/dev-pulse/internal/database"
 	"github.com/relaxart/dev-pulse/internal/github"
+	"github.com/relaxart/dev-pulse/internal/metrics"
 	"github.com/relaxart/dev-pulse/internal/models"
 	"github.com/relaxart/dev-pulse/migrations"
 	"github.com/relaxart/dev-pulse/web"
@@ -480,5 +482,185 @@ func TestReportBeforeTheFirstSyncIsAnEmptyDocumentNotAnError(t *testing.T) {
 	}
 	if *ts.githubHits != 0 {
 		t.Fatal("an empty report must not reach for GitHub to fill itself in")
+	}
+}
+
+// countTag returns how many times an HTML tag opens inside the given fragment.
+func countTag(fragment, tag string) int {
+	return strings.Count(fragment, "<"+tag+" ") + strings.Count(fragment, "<"+tag+">")
+}
+
+func TestRepositoryTableHeadersAreSortLinks(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/repositories?period=12m").Body.String()
+
+	for _, col := range []string{
+		"name", "contributors", "commits", "additions",
+		"prs_opened", "prs_merged", "reviews", "last_activity", "status",
+	} {
+		if !strings.Contains(body, "sort="+col) {
+			t.Errorf("the repositories table offers no sort link for %q", col)
+		}
+	}
+	if !strings.Contains(body, `aria-sort="descending"`) {
+		t.Error("the active column should expose aria-sort for screen readers")
+	}
+	// Every header link must carry the current date filter.
+	if strings.Count(body, "period=12m") < 9 {
+		t.Error("header links drop the selected period")
+	}
+}
+
+// The header list and the table body are written in two different places, so a
+// column added to one and not the other would silently misalign every cell.
+func TestRepositoryHeaderCountMatchesTheBodyColumns(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/repositories?period=12m").Body.String()
+
+	head := body[strings.Index(body, "<thead>"):strings.Index(body, "</thead>")]
+	headers := countTag(head, "th")
+
+	rest := body[strings.Index(body, "<tbody>"):]
+	firstRow := rest[:strings.Index(rest, "</tr>")]
+	cells := countTag(firstRow, "td")
+
+	if headers == 0 || cells == 0 {
+		t.Fatalf("could not read the table: %d headers, %d cells", headers, cells)
+	}
+	if headers != cells {
+		t.Errorf("the table has %d headers but %d cells per row", headers, cells)
+	}
+	if want := len(metrics.RepositoryColumns()); headers != want {
+		t.Errorf("rendered %d headers, want %d sortable columns", headers, want)
+	}
+}
+
+func TestRepositorySortChangesTheOrder(t *testing.T) {
+	ts := newTestServer(t)
+
+	// The seed has "api" (active, with commits) and "legacy" (archived, empty).
+	byName := ts.get(t, "/repositories?period=12m&sort=name&dir=asc").Body.String()
+	byNameDesc := ts.get(t, "/repositories?period=12m&sort=name&dir=desc").Body.String()
+
+	apiFirst := strings.Index(byName, ">api<") < strings.Index(byName, ">legacy<")
+	legacyFirst := strings.Index(byNameDesc, ">legacy<") < strings.Index(byNameDesc, ">api<")
+	if !apiFirst {
+		t.Error("ascending name sort did not put api before legacy")
+	}
+	if !legacyFirst {
+		t.Error("descending name sort did not put legacy before api")
+	}
+}
+
+// headerHrefs extracts the repositories table header links from a page.
+func headerHrefs(t *testing.T, body string) []url.Values {
+	t.Helper()
+	var out []url.Values
+	const marker = `href="/repositories?`
+	for i := strings.Index(body, marker); i >= 0; {
+		rest := body[i+len(marker):]
+		raw := rest[:strings.Index(rest, `"`)]
+		// The template escapes & as &amp; in attribute values.
+		q, err := url.ParseQuery(strings.ReplaceAll(raw, "&amp;", "&"))
+		if err != nil {
+			t.Fatalf("header link %q is not a valid query: %v", raw, err)
+		}
+		out = append(out, q)
+		next := strings.Index(rest, marker)
+		if next < 0 {
+			break
+		}
+		i = i + len(marker) + next
+	}
+	if len(out) == 0 {
+		t.Fatal("no repositories header links were rendered")
+	}
+	return out
+}
+
+// hasLink reports whether any header link asks for exactly this column and
+// direction.
+func hasLink(links []url.Values, sortKey, dir string) bool {
+	for _, q := range links {
+		if q.Get("sort") == sortKey && q.Get("dir") == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRepositoryHeaderTogglesDirection(t *testing.T) {
+	ts := newTestServer(t)
+
+	// While sorted by commits descending, the commits header must offer ascending.
+	links := headerHrefs(t, ts.get(t, "/repositories?period=12m&sort=commits&dir=desc").Body.String())
+	if !hasLink(links, "commits", "asc") {
+		t.Error("the active commits header does not toggle to ascending")
+	}
+	// An inactive column offers its own default rather than the active direction.
+	if !hasLink(links, "name", "asc") {
+		t.Error("the inactive name header should start ascending")
+	}
+	if !hasLink(links, "last_activity", "desc") {
+		t.Error("the inactive last activity header should start descending")
+	}
+
+	body := ts.get(t, "/repositories?period=12m&sort=commits&dir=asc").Body.String()
+	if !hasLink(headerHrefs(t, body), "commits", "desc") {
+		t.Error("an ascending commits header does not toggle back to descending")
+	}
+	if !strings.Contains(body, `aria-sort="ascending"`) {
+		t.Error("an ascending column should report aria-sort=ascending")
+	}
+
+	// Every header link keeps the selected period.
+	for _, q := range headerHrefs(t, body) {
+		if q.Get("period") != "12m" {
+			t.Errorf("header link for %q dropped the period: %v", q.Get("sort"), q)
+		}
+	}
+}
+
+func TestRepositorySortSurvivesAPeriodChange(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/repositories?period=12m&sort=reviews&dir=asc").Body.String()
+
+	// The period form posts every other parameter back as a hidden input.
+	if !strings.Contains(body, `<input type="hidden" name="sort" value="reviews">`) {
+		t.Error("the period picker drops the chosen sort column")
+	}
+	if !strings.Contains(body, `<input type="hidden" name="dir" value="asc">`) {
+		t.Error("the period picker drops the chosen sort direction")
+	}
+}
+
+func TestInvalidRepositorySortFallsBackWithoutFailing(t *testing.T) {
+	ts := newTestServer(t)
+	for _, q := range []string{
+		"?sort=nonsense", "?sort=name;DROP+TABLE+repositories", "?sort=commits&dir=sideways", "?dir=asc",
+	} {
+		w := ts.get(t, "/repositories"+q)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET /repositories%s = %d, want 200", q, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "sorted by") {
+			t.Errorf("GET /repositories%s did not render the table", q)
+		}
+	}
+
+	// An unknown column falls back to the documented default.
+	body := ts.get(t, "/repositories?sort=nonsense").Body.String()
+	if !strings.Contains(body, "sorted by <strong>Commits</strong>") {
+		t.Error("an unknown column should fall back to the default Commits sort")
+	}
+}
+
+func TestOnlyTheRepositoriesTableIsSortable(t *testing.T) {
+	ts := newTestServer(t)
+	// The dashboard's repository panel is a fixed top-N list, not a sortable
+	// table; adding links there would suggest a sort that does not exist.
+	body := ts.get(t, "/?period=12m").Body.String()
+	if strings.Contains(body, `aria-sort=`) {
+		t.Error("the dashboard should not advertise sortable headers")
 	}
 }

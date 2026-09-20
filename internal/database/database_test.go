@@ -387,7 +387,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		}
 	}
 
-	repos, err := db.RepositoryRanking(ctx, f)
+	repos, err := db.RepositoryRanking(ctx, f, metrics.DefaultRepositorySort, metrics.SortDesc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestArchivedRepositoriesAreExcludedFromAnalytics(t *testing.T) {
 
 	// The repository list keeps archived repositories visible and flagged.
 	f.IncludeArchived = true
-	repos, err := db.RepositoryRanking(ctx, f)
+	repos, err := db.RepositoryRanking(ctx, f, metrics.DefaultRepositorySort, metrics.SortDesc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +799,7 @@ func TestRepositoryAndContributorDetailQueries(t *testing.T) {
 	}
 
 	// A repository with no activity in the window must still be listed.
-	ranking, err := db.RepositoryRanking(ctx, f)
+	ranking, err := db.RepositoryRanking(ctx, f, metrics.DefaultRepositorySort, metrics.SortDesc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,4 +894,124 @@ func contains(haystack, needle string) bool {
 		}
 		return false
 	})()
+}
+
+func TestRepositoryRankingSortsByEveryColumn(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+
+	// zulu: most commits, no reviews, active, newest activity.
+	zulu := mustRepo(t, db, org, "R_z", "zulu", false)
+	// alpha: fewest commits, most reviews, oldest activity.
+	alpha := mustRepo(t, db, org, "R_a", "alpha", false)
+	// mike is archived and has no activity at all.
+	mike := mustRepo(t, db, org, "R_m", "mike", true)
+
+	alice := mustContributor(t, db, "U_alice", "alice", false)
+	bob := mustContributor(t, db, "U_bob", "bob", false)
+
+	for i := 0; i < 6; i++ {
+		mustCommit(t, db, org.ID, zulu, &alice, fmt.Sprintf("z%d", i), day(10+i), 100, 10, 5)
+	}
+	mustCommit(t, db, org.ID, alpha, &alice, "a1", day(2), 5, 1, 1)
+	mustCommit(t, db, org.ID, alpha, &bob, "a2", day(2), 5, 1, 1)
+
+	prZ := mustPR(t, db, org.ID, zulu, &alice, "PR_z", 1, day(11), nil, nil)
+	prA := mustPR(t, db, org.ID, alpha, &alice, "PR_a1", 1, day(2), nil, nil)
+	merged := day(3)
+	mustPR(t, db, org.ID, alpha, &bob, "PR_a2", 2, day(2), &merged, &merged)
+	_ = prZ
+
+	mustReview(t, db, org.ID, alpha, prA, &bob, "RV_1", models.ReviewApproved, day(3), 1)
+	mustReview(t, db, org.ID, alpha, prA, &alice, "RV_2", models.ReviewCommented, day(3), 1)
+
+	rebuild(t, db, org.ID, []int64{zulu, alpha, mike})
+
+	f := fullRange()
+	f.OrganizationID = org.ID
+	f.IncludeArchived = true
+
+	cases := []struct {
+		key, dir string
+		wantTop  string
+	}{
+		{"name", metrics.SortAsc, "alpha"},
+		{"name", metrics.SortDesc, "zulu"},
+		{"commits", metrics.SortDesc, "zulu"},
+		{"contributors", metrics.SortDesc, "alpha"},
+		{"additions", metrics.SortDesc, "zulu"},
+		{"prs_opened", metrics.SortDesc, "alpha"},
+		{"prs_merged", metrics.SortDesc, "alpha"},
+		{"reviews", metrics.SortDesc, "alpha"},
+		{"last_activity", metrics.SortDesc, "zulu"},
+		{"last_activity", metrics.SortAsc, "alpha"},
+		{"status", metrics.SortDesc, "mike"},
+	}
+	for _, c := range cases {
+		t.Run(c.key+"-"+c.dir, func(t *testing.T) {
+			rows, err := db.RepositoryRanking(ctx, f, c.key, c.dir)
+			if err != nil {
+				t.Fatalf("sort by %s %s: %v", c.key, c.dir, err)
+			}
+			if len(rows) != 3 {
+				t.Fatalf("got %d rows, want 3", len(rows))
+			}
+			if rows[0].Name != c.wantTop {
+				names := make([]string, len(rows))
+				for i, r := range rows {
+					names[i] = r.Name
+				}
+				t.Errorf("sorted by %s %s the order is %v, want %q first", c.key, c.dir, names, c.wantTop)
+			}
+		})
+	}
+}
+
+func TestRepositoriesWithoutActivitySortLastInBothDirections(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	active := mustRepo(t, db, org, "R_a", "active", false)
+	idle := mustRepo(t, db, org, "R_i", "idle", false)
+	alice := mustContributor(t, db, "U_alice", "alice", false)
+
+	mustCommit(t, db, org.ID, active, &alice, "c1", day(2), 10, 1, 1)
+	rebuild(t, db, org.ID, []int64{active, idle})
+
+	f := fullRange()
+	f.OrganizationID = org.ID
+
+	// A repository with no activity in the period has a NULL last_activity. It
+	// must never jump to the top of an ascending sort.
+	for _, dir := range []string{metrics.SortAsc, metrics.SortDesc} {
+		rows, err := db.RepositoryRanking(ctx, f, "last_activity", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows[len(rows)-1].Name != "idle" {
+			t.Errorf("sorting last_activity %s put %q last, want idle", dir, rows[len(rows)-1].Name)
+		}
+	}
+}
+
+func TestRepositoryRankingIgnoresAnInjectedSortKey(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org := mustOrg(t, db, "O_1", "acme")
+	mustRepo(t, db, org, "R_1", "api", false)
+
+	f := fullRange()
+	f.OrganizationID = org.ID
+
+	rows, err := db.RepositoryRanking(ctx, f, "name; DROP TABLE repositories", "ASC; DROP TABLE repositories")
+	if err != nil {
+		t.Fatalf("an unknown sort must be ignored, not fail: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows, want 1", len(rows))
+	}
+	if countRows(t, db, "repositories") != 1 {
+		t.Fatal("the repositories table disappeared: the sort key reached SQL")
+	}
 }

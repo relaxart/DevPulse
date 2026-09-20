@@ -4,7 +4,10 @@
 <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
   <div>
     <h1 class="page-title mb-0">Repositories</h1>
-    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}}</p>
+    <p class="page-subtitle mb-0">
+      {{.Org}} · {{.Range.Label}} · sorted by <strong>{{.SortLabel}}</strong>
+      ({{if eq .SortDir "asc"}}ascending{{else}}descending{{end}})
+    </p>
   </div>
   <div class="text-body-secondary small">
     {{if .IncludeArchived}}
@@ -23,15 +26,12 @@
     <table class="table table-hover align-middle mb-0">
       <thead>
         <tr>
-          <th>Repository</th>
-          <th class="text-end">Contributors</th>
-          <th class="text-end">Commits</th>
-          <th class="text-end">+/−</th>
-          <th class="text-end">PRs opened</th>
-          <th class="text-end">PRs merged</th>
-          <th class="text-end">Reviews</th>
-          <th class="text-end">Last activity</th>
-          <th>Status</th>
+          {{range .Headers}}
+            <th class="sortable{{if .Numeric}} text-end{{end}}{{if .Active}} sorted{{if .Ascending}} asc{{end}}{{end}}"
+                aria-sort="{{.AriaSort}}">
+              <a href="{{.Href}}"{{if .Title}} title="{{.Title}}"{{end}}>{{.Label}}</a>
+            </th>
+          {{end}}
         </tr>
       </thead>
       <tbody>
