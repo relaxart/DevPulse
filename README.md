@@ -60,6 +60,9 @@ It provides:
   consistently across every page.
 - **PDF reports** — download the whole picture for any period as a printable
   document.
+- **Light and dark themes** — pick Light, Dark or System from the header. The
+  choice is remembered per browser, System follows the operating system live, and
+  the theme is applied before the first paint so navigation never flashes.
 
 ### What it deliberately does not do
 

@@ -1,11 +1,19 @@
 /* DevPulse - Material Design flavoured layer on top of Bootstrap 5. */
 
 :root {
+  color-scheme: light;
+
   --md-primary: #1a73e8;
   --md-primary-dark: #1557b0;
+  --md-primary-rgb: 26, 115, 232;
+  --md-primary-soft: rgba(26, 115, 232, .10);
+  --md-primary-softer: rgba(26, 115, 232, .04);
+  --md-primary-outline: rgba(26, 115, 232, .40);
+
   --md-surface: #ffffff;
   --md-bg: #f4f6fa;
   --md-outline: #dfe3eb;
+  --md-outline-soft: #eef1f6;
   --md-text: #1f2430;
   --md-text-muted: #5f6672;
   --md-success: #1e8e3e;
@@ -16,7 +24,37 @@
 
   --bs-body-font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
   --bs-primary: var(--md-primary);
-  --bs-link-color-rgb: 26, 115, 232;
+  --bs-link-color-rgb: var(--md-primary-rgb);
+}
+
+/* Dark mode. The attribute is set on <html> before first paint by the inline
+   script in the layout, so there is no flash of the light theme. */
+:root[data-bs-theme="dark"] {
+  color-scheme: dark;
+
+  --md-primary: #8ab4f8;
+  --md-primary-dark: #aecbfa;
+  --md-primary-rgb: 138, 180, 248;
+  --md-primary-soft: rgba(138, 180, 248, .14);
+  --md-primary-softer: rgba(138, 180, 248, .07);
+  --md-primary-outline: rgba(138, 180, 248, .45);
+
+  --md-surface: #1b1f27;
+  --md-bg: #10131a;
+  --md-outline: #2d3340;
+  --md-outline-soft: #262c37;
+  --md-text: #e4e7ee;
+  --md-text-muted: #9aa3b2;
+  --md-success: #81c995;
+  --md-danger: #f28b82;
+  --md-elev-1: 0 1px 2px rgba(0, 0, 0, .40), 0 1px 3px rgba(0, 0, 0, .30);
+  --md-elev-2: 0 2px 6px rgba(0, 0, 0, .45), 0 6px 16px rgba(0, 0, 0, .35);
+
+  --bs-body-bg: var(--md-bg);
+  --bs-body-color: var(--md-text);
+  --bs-secondary-color: var(--md-text-muted);
+  --bs-border-color: var(--md-outline);
+  --bs-emphasis-color: var(--md-text);
 }
 
 body {
@@ -58,7 +96,7 @@ main { flex: 1 0 auto; }
 .app-brand-icon {
   font-size: 30px;
   color: var(--md-primary);
-  background: rgba(26, 115, 232, .1);
+  background: var(--md-primary-soft);
   border-radius: 12px;
   padding: 8px;
   vertical-align: middle;
@@ -70,7 +108,7 @@ main { flex: 1 0 auto; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(26, 115, 232, .1);
+  background: var(--md-primary-soft);
   color: var(--md-primary-dark);
   border-radius: 999px;
   padding: 5px 14px;
@@ -89,7 +127,7 @@ main { flex: 1 0 auto; }
   border-radius: 999px;
   border: 1px solid var(--md-outline);
 }
-.sync-chip.running { color: var(--md-primary); border-color: rgba(26, 115, 232, .4); }
+.sync-chip.running { color: var(--md-primary); border-color: var(--md-primary-outline); }
 .sync-chip.running .material-symbols-outlined { animation: spin 1.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -108,7 +146,7 @@ main { flex: 1 0 auto; }
   border-bottom: 3px solid transparent;
   white-space: nowrap;
 }
-.app-nav-link:hover { color: var(--md-primary); background: rgba(26, 115, 232, .04); }
+.app-nav-link:hover { color: var(--md-primary); background: var(--md-primary-softer); }
 .app-nav-link.active { color: var(--md-primary); border-bottom-color: var(--md-primary); }
 
 /* ---------- Surfaces ---------- */
@@ -150,7 +188,7 @@ main { flex: 1 0 auto; }
 }
 .stat-card-icon {
   color: var(--md-primary);
-  background: rgba(26, 115, 232, .1);
+  background: var(--md-primary-soft);
   width: 34px; height: 34px;
   border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
@@ -163,7 +201,12 @@ main { flex: 1 0 auto; }
 
 /* ---------- Tables ---------- */
 
-.table { --bs-table-hover-bg: rgba(26, 115, 232, .04); margin-bottom: 0; }
+.table {
+  --bs-table-hover-bg: var(--md-primary-softer);
+  --bs-table-color: var(--md-text);
+  --bs-table-bg: transparent;
+  margin-bottom: 0;
+}
 .table > thead th {
   font-size: .74rem;
   text-transform: uppercase;
@@ -177,7 +220,7 @@ main { flex: 1 0 auto; }
 .table > thead th a:hover { color: var(--md-primary); }
 .table > thead th.sorted a { color: var(--md-primary); font-weight: 700; }
 .table > thead th.sorted::after { content: " ▼"; color: var(--md-primary); font-size: .6rem; }
-.table > tbody td { border-color: #eef1f6; font-size: .9rem; }
+.table > tbody td { border-color: var(--md-outline-soft); font-size: .9rem; }
 .ranking-table td, .ranking-table th { padding-left: .5rem; padding-right: .5rem; }
 .row-archived { opacity: .62; }
 .repo-name { font-weight: 500; }
@@ -195,7 +238,7 @@ main { flex: 1 0 auto; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(26, 115, 232, .12);
+  background: var(--md-primary-soft);
   color: var(--md-primary-dark);
   font-size: .72rem;
   font-weight: 600;
@@ -243,3 +286,36 @@ main { flex: 1 0 auto; }
 
 .report-menu .dropdown-menu { min-width: 250px; }
 .report-menu .dropdown-item-text { max-width: 250px; white-space: normal; line-height: 1.35; }
+
+/* ---------- Colour theme picker ---------- */
+
+.theme-toggle .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--md-outline);
+  color: var(--md-text-muted);
+  background: transparent;
+}
+.theme-toggle .btn-icon:hover { color: var(--md-primary); border-color: var(--md-primary-outline); }
+.theme-toggle .dropdown-item { display: flex; align-items: center; }
+.theme-toggle .dropdown-item .check { visibility: hidden; margin-left: auto; color: var(--md-primary); }
+.theme-toggle .dropdown-item[aria-checked="true"] .check { visibility: visible; }
+.theme-toggle .dropdown-item[aria-checked="true"] { color: var(--md-primary); font-weight: 500; }
+
+/* ---------- Dark-mode corrections for Bootstrap utilities ---------- */
+
+:root[data-bs-theme="dark"] .text-bg-light {
+  background-color: var(--md-outline) !important;
+  color: var(--md-text) !important;
+}
+:root[data-bs-theme="dark"] .stat-card,
+:root[data-bs-theme="dark"] .surface { border: 1px solid var(--md-outline); }
+:root[data-bs-theme="dark"] .app-bar { border-bottom: 1px solid var(--md-outline); }
+:root[data-bs-theme="dark"] .table > thead th { border-bottom-color: var(--md-outline); }
+:root[data-bs-theme="dark"] .row-archived { opacity: .55; }
+:root[data-bs-theme="dark"] code { color: #f7a8b8; }

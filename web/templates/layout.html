@@ -3,6 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<script>
+  // Applies the stored colour theme before the first paint, so switching pages
+  // never flashes the light theme. Falls back to the operating system setting.
+  (function () {
+    try {
+      var stored = window.localStorage.getItem("devpulse-theme");
+      var mode = (stored === "light" || stored === "dark") ? stored : "auto";
+      var dark = mode === "dark" ||
+        (mode === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      var root = document.documentElement;
+      root.setAttribute("data-bs-theme", dark ? "dark" : "light");
+      root.setAttribute("data-theme-mode", mode);
+    } catch (e) {
+      // Private mode or blocked storage: keep the light default from the markup.
+    }
+  })();
+</script>
 <title>{{if .Title}}{{.Title}} · {{end}}{{.AppName}} — {{.Org}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,6 +51,7 @@
         {{template "syncIndicator" .}}
         {{template "periodPicker" .}}
         {{template "reportMenu" .}}
+        {{template "themeToggle" .}}
       </div>
     </div>
 
