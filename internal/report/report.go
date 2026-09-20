@@ -66,6 +66,27 @@ type Data struct {
 	// Truncated reports say so on the page rather than silently cutting off.
 	ContributorsTruncated bool
 	RepositoriesTruncated bool
+
+	// NoData marks a report for an organization that has never been
+	// synchronized, so the document can say so instead of looking like a period
+	// with genuinely zero activity.
+	NoData bool
+}
+
+// Empty builds a report for an organization that has not been synchronized yet.
+// A fresh deployment should still produce a readable document rather than an
+// error, exactly as the dashboard renders with a "no data yet" banner.
+func Empty(organization string, rng metrics.Range) *Data {
+	return &Data{
+		Organization: organization,
+		Range:        rng,
+		Previous:     rng.PreviousRange(),
+		Sort:         metrics.ResolveSort(""),
+		GeneratedAt:  time.Now().UTC(),
+		Granularity:  rng.Granularity(),
+		Metrics:      metrics.RankingMetrics(),
+		NoData:       true,
+	}
 }
 
 // Collect assembles the report data from PostgreSQL.
