@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /contributors/{login}", s.handleContributor)
 	mux.HandleFunc("GET /repositories", s.handleRepositories)
 	mux.HandleFunc("GET /repositories/{name}", s.handleRepository)
+	mux.HandleFunc("GET /report.pdf", s.handleReport)
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /status/sync", s.handleSyncNow)
 	mux.HandleFunc("GET /health", s.handleHealth)

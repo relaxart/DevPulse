@@ -78,6 +78,7 @@ func templateFuncs() template.FuncMap {
 		"link":        link,
 		"sortLink":    sortLink,
 		"pageLink":    pageLink,
+		"reportLink":  reportLink,
 		"dict":        dict,
 		"initials":    initials,
 		"stateBadge":  stateBadge,
@@ -306,6 +307,30 @@ func pageLink(path string, q url.Values, page int) template.URL {
 		return template.URL(path)
 	}
 	return template.URL(path + "?" + v.Encode())
+}
+
+// reportLink builds a PDF download link. An empty periodKey means "whatever the
+// page is currently showing", which is the only way a custom range is exported.
+func reportLink(q url.Values, periodKey string) template.URL {
+	v := url.Values{}
+	if sortKey := q.Get("sort"); metrics.IsValidSort(sortKey) {
+		v.Set("sort", sortKey)
+	}
+	switch periodKey {
+	case "":
+		for _, k := range []string{"period", "from", "to"} {
+			if val := q.Get(k); val != "" {
+				v.Set(k, val)
+			}
+		}
+	case metrics.PeriodCustom:
+		v.Set("period", metrics.PeriodCustom)
+		v.Set("from", q.Get("from"))
+		v.Set("to", q.Get("to"))
+	default:
+		v.Set("period", periodKey)
+	}
+	return template.URL("/report.pdf?" + v.Encode())
 }
 
 // dict builds a map inside a template, for partial invocation.

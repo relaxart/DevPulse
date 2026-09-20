@@ -238,3 +238,8 @@ main { flex: 1 0 auto; }
   .status-list dd { margin-bottom: 8px; }
   .period-picker { width: 100%; }
 }
+
+/* ---------- PDF report menu ---------- */
+
+.report-menu .dropdown-menu { min-width: 250px; }
+.report-menu .dropdown-item-text { max-width: 250px; white-space: normal; line-height: 1.35; }

@@ -10,6 +10,7 @@ import (
 
 // Period keys accepted by every page via the `period` query parameter.
 const (
+	Period7d     = "7d"
 	Period30d    = "30d"
 	Period3m     = "3m"
 	Period6m     = "6m"
@@ -54,6 +55,7 @@ type PeriodOption struct {
 // PeriodOptions lists the presets shown in the date selector.
 func PeriodOptions() []PeriodOption {
 	return []PeriodOption{
+		{Key: Period7d, Label: "Last 7 days"},
 		{Key: Period30d, Label: "Last 30 days"},
 		{Key: Period3m, Label: "Last 3 months"},
 		{Key: Period6m, Label: "Last 6 months"},
@@ -73,6 +75,8 @@ func ResolveRange(period, from, to string, now time.Time) (Range, error) {
 	}
 
 	switch period {
+	case Period7d:
+		return Range{Key: Period7d, Label: "Last 7 days", From: today.AddDate(0, 0, -6), To: today}, nil
 	case Period3m:
 		return Range{Key: Period3m, Label: "Last 3 months", From: today.AddDate(0, -3, 0).AddDate(0, 0, 1), To: today}, nil
 	case Period6m:

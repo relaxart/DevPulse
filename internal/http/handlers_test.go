@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -361,5 +363,96 @@ func TestStaticAssetsAreServed(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("GET %s = %d", p, w.Code)
 		}
+	}
+}
+
+func TestReportDownloadsAPDFForEveryPeriod(t *testing.T) {
+	ts := newTestServer(t)
+
+	periods := []string{"", "?period=7d", "?period=30d", "?period=3m", "?period=6m", "?period=12m",
+		"?period=custom&from=2026-01-01&to=2026-03-31"}
+
+	for _, q := range periods {
+		w := ts.get(t, "/report.pdf"+q)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /report.pdf%s = %d", q, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+			t.Errorf("Content-Type = %q for %s", ct, q)
+		}
+		disposition := w.Header().Get("Content-Disposition")
+		if !strings.HasPrefix(disposition, `attachment; filename="devpulse-acme-`) {
+			t.Errorf("Content-Disposition = %q for %s", disposition, q)
+		}
+		body := w.Body.Bytes()
+		if !bytes.HasPrefix(body, []byte("%PDF-")) {
+			t.Errorf("%s did not return a PDF", q)
+		}
+		if len(body) < 2000 {
+			t.Errorf("%s returned only %d bytes", q, len(body))
+		}
+		if got := w.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
+			t.Errorf("Content-Length = %q but body is %d bytes", got, len(body))
+		}
+	}
+
+	if *ts.githubHits != 0 {
+		t.Fatal("generating a report must not call GitHub")
+	}
+}
+
+func TestReportFilenameAndContentFollowThePeriod(t *testing.T) {
+	ts := newTestServer(t)
+
+	short := ts.get(t, "/report.pdf?period=7d")
+	long := ts.get(t, "/report.pdf?period=12m")
+
+	shortName := short.Header().Get("Content-Disposition")
+	longName := long.Header().Get("Content-Disposition")
+	if shortName == longName {
+		t.Errorf("both periods produced the same filename: %q", shortName)
+	}
+	if bytes.Equal(short.Body.Bytes(), long.Body.Bytes()) {
+		t.Error("the 7 day and 12 month reports are byte-identical; the period is not applied")
+	}
+}
+
+func TestReportHonoursTheSortKey(t *testing.T) {
+	ts := newTestServer(t)
+	for _, sortKey := range []string{"commits", "reviews_submitted", "active_days", "not-a-metric"} {
+		w := ts.get(t, "/report.pdf?period=12m&sort="+sortKey)
+		if w.Code != http.StatusOK {
+			t.Errorf("sort=%s returned %d", sortKey, w.Code)
+		}
+		if !bytes.HasPrefix(w.Body.Bytes(), []byte("%PDF-")) {
+			t.Errorf("sort=%s did not return a PDF", sortKey)
+		}
+	}
+}
+
+func TestReportNeverContainsTheToken(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/report.pdf?period=12m").Body.Bytes()
+	if bytes.Contains(body, []byte("github_pat_never_rendered")) {
+		t.Fatal("the GitHub token appeared inside the generated report")
+	}
+}
+
+func TestReportMenuIsOfferedOnEveryPage(t *testing.T) {
+	ts := newTestServer(t)
+	for _, p := range []string{"/", "/contributors", "/repositories", "/status"} {
+		body := ts.get(t, p+"?period=3m").Body.String()
+		if !strings.Contains(body, "/report.pdf?period=3m") {
+			t.Errorf("%s does not offer a report for the current filter", p)
+		}
+		if !strings.Contains(body, "/report.pdf?period=7d") {
+			t.Errorf("%s does not offer the 7 day report preset", p)
+		}
+	}
+
+	// The contributor ranking must carry its sort key into the download link.
+	body := ts.get(t, "/contributors?period=3m&sort=approvals").Body.String()
+	if !strings.Contains(body, "sort=approvals") || !strings.Contains(body, "/report.pdf?") {
+		t.Error("the report link should preserve the selected sort key")
 	}
 }

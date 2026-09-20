@@ -12,6 +12,7 @@ import (
 	"github.com/relaxart/dev-pulse/internal/database"
 	"github.com/relaxart/dev-pulse/internal/metrics"
 	"github.com/relaxart/dev-pulse/internal/models"
+	"github.com/relaxart/dev-pulse/internal/report"
 )
 
 // AppName is shown in the header and the page titles.
@@ -525,6 +526,61 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 		target += "?triggered=1"
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// handleReport streams a PDF activity report for the selected period.
+//
+// Like every other page, it is built purely from PostgreSQL aggregates; asking
+// for a report never triggers a GitHub call.
+func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	pc, ok := s.context(w, r, "")
+	if !ok {
+		return
+	}
+	if pc.Org == nil {
+		s.notFound(w, r, pc.Layout,
+			"There is nothing to report yet - the first synchronization has not produced any data.")
+		return
+	}
+
+	data, err := report.Collect(r.Context(), s.db, report.Request{
+		Organization: s.cfg.GitHubOrg,
+		Filter:       pc.Filter,
+		Range:        pc.Layout.Range,
+		SortKey:      r.URL.Query().Get("sort"),
+		LastSync:     pc.Org.LastSyncedAt,
+	})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	pdf, err := report.Render(data)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Length", strconv.Itoa(len(pdf)))
+	// The filename is built from a slug of the organization and the ISO dates,
+	// so it cannot inject header characters.
+	w.Header().Set("Content-Disposition", `attachment; filename="`+data.Filename()+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(pdf); err != nil {
+		s.log.Warn("report download interrupted", "error", err)
+		return
+	}
+	s.log.Info("report generated",
+		"organization", s.cfg.GitHubOrg,
+		"period", data.Range.Key,
+		"from", data.Range.FromString(),
+		"to", data.Range.ToString(),
+		"contributors", len(data.Contributors),
+		"repositories", len(data.Repositories),
+		"bytes", len(pdf),
+	)
 }
 
 type healthResponse struct {

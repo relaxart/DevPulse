@@ -33,6 +33,33 @@
 </form>
 {{end}}
 
+{{define "reportMenu"}}
+<div class="dropdown report-menu">
+  <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button"
+          data-bs-toggle="dropdown" aria-expanded="false" title="Download a PDF activity report">
+    <span class="material-symbols-outlined align-middle me-1">picture_as_pdf</span><span class="d-none d-md-inline">Report</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><h6 class="dropdown-header">Download PDF report</h6></li>
+    <li>
+      <a class="dropdown-item" href="{{reportLink .Query ""}}">
+        Current filter <span class="text-body-secondary">({{.Range.Label}})</span>
+      </a>
+    </li>
+    <li><hr class="dropdown-divider"></li>
+    {{range .PeriodOptions}}
+      {{if ne .Key "custom"}}
+        <li><a class="dropdown-item" href="{{reportLink $.Query .Key}}">{{.Label}}</a></li>
+      {{end}}
+    {{end}}
+    <li><hr class="dropdown-divider"></li>
+    <li><span class="dropdown-item-text small text-body-secondary">
+      Pick a custom range in the date selector, then choose <em>Current filter</em>.
+    </span></li>
+  </ul>
+</div>
+{{end}}
+
 {{define "statCard"}}
 <div class="col-6 col-md-4 col-xl-2">
   <div class="stat-card">

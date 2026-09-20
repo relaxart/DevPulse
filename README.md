@@ -29,13 +29,14 @@ statistics in a server-rendered Bootstrap 5 dashboard.
 10. [Incremental synchronization](#10-incremental-synchronization)
 11. [Date filters](#11-date-filters)
 12. [Contributor ranking](#12-contributor-ranking)
-13. [Bot exclusions](#13-bot-exclusions)
-14. [Archived repository handling](#14-archived-repository-handling)
-15. [GitHub GraphQL rate-limit handling](#15-github-graphql-rate-limit-handling)
-16. [Security considerations](#16-security-considerations)
-17. [Troubleshooting](#17-troubleshooting)
-18. [Metric definitions](#18-metric-definitions)
-19. [Development](#19-development)
+13. [PDF reports](#13-pdf-reports)
+14. [Bot exclusions](#14-bot-exclusions)
+15. [Archived repository handling](#15-archived-repository-handling)
+16. [GitHub GraphQL rate-limit handling](#16-github-graphql-rate-limit-handling)
+17. [Security considerations](#17-security-considerations)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Metric definitions](#19-metric-definitions)
+20. [Development](#20-development)
 
 ---
 
@@ -55,8 +56,10 @@ It provides:
 - **Repository list and detail pages** — contributors, commits, PRs, reviews,
   last activity, archived status.
 - **Status page** — sync health, GraphQL rate limit, stored row counts, run history.
-- **Global date filter** — 30 days, 3/6/12 months or a custom range, applied
+- **Global date filter** — 7 or 30 days, 3/6/12 months or a custom range, applied
   consistently across every page.
+- **PDF reports** — download the whole picture for any period as a printable
+  document.
 
 ### What it deliberately does not do
 
@@ -367,6 +370,7 @@ Every page takes the same filter and passes it along in links:
 
 | Selection | URL |
 |---|---|
+| Last 7 days | `/contributors?period=7d` |
 | Last 30 days | `/contributors?period=30d` |
 | Last 3 months | `/contributors?period=3m` |
 | Last 6 months | `/contributors?period=6m` |
@@ -418,7 +422,64 @@ their reviews — all for the selected period.
 
 ---
 
-## 13. Bot exclusions
+## 13. PDF reports
+
+Every page carries a **Report** button in the header. It offers the period the
+page is currently showing, plus each preset:
+
+- Last 7 days
+- Last 30 days
+- Last 3 months
+- Last 6 months
+- Last 12 months
+
+For a custom range, set it in the date selector and then choose **Current
+filter** — the report follows whatever the page is showing.
+
+The download is served by:
+
+```
+GET /report.pdf?period=3m
+GET /report.pdf?period=custom&from=2026-01-01&to=2026-03-31
+GET /report.pdf?period=12m&sort=reviews_submitted
+```
+
+`sort` accepts any [contributor ranking](#12-contributor-ranking) metric and
+orders the contributor table in the document; it defaults to commits. Opening
+the link from `/contributors` keeps whatever sort is on screen.
+
+The document is landscape A4 and contains:
+
+1. A header with the organization, the period (and its UTC bounds), when the
+   report was generated, the sort key, the archived-repository policy, the
+   excluded logins and the last successful synchronization.
+2. The six overview numbers, each compared with the immediately preceding period
+   of equal length.
+3. A bar chart of commits, pull requests opened and reviews per bucket, at the
+   same granularity the dashboard uses for that period.
+4. The contributor table with all fourteen metrics, up to 100 rows.
+5. The repository table, including archived and private repositories marked as
+   such, up to 100 rows.
+6. The metric glossary, with the same wording as the UI.
+
+Tables that hit the row cap say so on the page rather than cutting off silently.
+
+Reports are built from the same PostgreSQL aggregates as the dashboard, honour
+`INCLUDE_ARCHIVED` and `EXCLUDED_USERS`, and are scoped to `GITHUB_ORG`.
+**Generating a report never calls GitHub.**
+
+The file is named `devpulse-<org>-<from>-to-<to>.pdf`.
+
+### Limitation
+
+The PDF uses the standard built-in fonts, which cover Latin-1. A display name in
+another script (CJK, for example) or an emoji is replaced with `?` in the
+document; the ASCII `@login` shown next to it is always intact. Embedding a
+Unicode font would fix this at the cost of a larger binary.
+
+---
+
+## 14. Bot exclusions
 
 Two mechanisms, both applied at query time:
 
@@ -434,7 +495,7 @@ in the database and can be restored by removing the login from the list.
 
 ---
 
-## 14. Archived repository handling
+## 15. Archived repository handling
 
 Archived repositories are **always stored**, so nothing disappears from history.
 
@@ -452,7 +513,7 @@ Set `INCLUDE_ARCHIVED=true` to fold them back into every statistic.
 
 ---
 
-## 15. GitHub GraphQL rate-limit handling
+## 16. GitHub GraphQL rate-limit handling
 
 GitHub's GraphQL API uses a point budget (5,000 points/hour for most accounts).
 
@@ -481,7 +542,7 @@ Protections:
 
 ---
 
-## 16. Security considerations
+## 17. Security considerations
 
 **The token.** `GITHUB_TOKEN` is read from the environment into memory. It is
 never stored in PostgreSQL, never rendered in HTML, never included in API
@@ -517,7 +578,7 @@ putting an authenticating proxy in front of it.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 **`GITHUB_TOKEN must be set` at startup**
 Configuration validation failed. The message lists every missing or malformed
@@ -568,7 +629,7 @@ re-synchronizes from scratch.
 
 ---
 
-## 18. Metric definitions
+## 19. Metric definitions
 
 Also available in the UI under *"What each metric means"*.
 
@@ -594,7 +655,7 @@ the pull request **author**; review metrics to the **reviewer**. Days are UTC.
 
 ---
 
-## 19. Development
+## 20. Development
 
 The repository is plain Go with no code generation.
 
@@ -620,8 +681,10 @@ Test coverage includes date-range calculation, organization filtering and
 isolation, contributor aggregation, ranking and sorting, bot exclusion, archived
 repository exclusion, duplicate-synchronization prevention, upsert idempotency,
 configuration validation, GraphQL pagination (including nested review pages),
-rate-limit handling, template escaping of GitHub-provided strings, and an
-end-to-end check that rendering a page never calls GitHub. Collector tests run
+rate-limit handling, template escaping of GitHub-provided strings, PDF report
+generation for every period (including table widths that must fit the page), and
+an end-to-end check that neither rendering a page nor generating a report ever
+calls GitHub. Collector tests run
 against recorded GraphQL responses — no network access required.
 
 Building the image:
