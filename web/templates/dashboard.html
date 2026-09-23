@@ -3,12 +3,27 @@
 <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
   <div>
     <h1 class="page-title mb-0">Overview</h1>
-    <p class="page-subtitle mb-0">{{.Org}} · {{.Range.Label}} · {{.Range.FromString}} → {{.Range.ToString}}</p>
+    <p class="page-subtitle mb-0">
+      {{.Org}}{{if .Team}} · team <strong>{{.Team.DisplayName}}</strong>{{end}} ·
+      {{.Range.Label}} · {{.Range.FromString}} → {{.Range.ToString}}
+    </p>
   </div>
-  <div class="text-body-secondary small">
-    Every number on this page is read from PostgreSQL aggregates. Changing the period never calls GitHub.
+  <div class="d-flex flex-wrap align-items-center gap-3">
+    {{template "teamFilter" .}}
+    <div class="text-body-secondary small dashboard-note">
+      Every number on this page is read from PostgreSQL aggregates. Changing the period never calls GitHub.
+    </div>
   </div>
 </div>
+
+{{if .Team}}
+<p class="text-body-secondary small mb-3">
+  Scoped to the <strong>{{.Team.DisplayName}}</strong> team: the headline figures, charts,
+  contributor lists and activity feed cover its {{num .Team.MemberCount}} members
+  (wherever in the organization they worked), while the repositories panel lists the
+  {{num .Team.RepositoryCount}} repositories the team has access to.
+</p>
+{{end}}
 
 <div class="row g-3 mb-4">
   {{template "statCard" dict "Label" "Active contributors" "Value" (num .Overview.ActiveContributors) "Icon" "group"

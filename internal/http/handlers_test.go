@@ -685,9 +685,9 @@ func TestOnlyTheRepositoriesTableIsSortable(t *testing.T) {
 	}
 }
 
-func TestTeamFilterIsOfferedOnBothPages(t *testing.T) {
+func TestTeamFilterIsOfferedOnEveryAnalyticsPage(t *testing.T) {
 	ts := newTestServer(t)
-	for _, path := range []string{"/contributors", "/repositories"} {
+	for _, path := range []string{"/", "/contributors", "/repositories"} {
 		body := ts.get(t, path+"?period=12m").Body.String()
 		if !strings.Contains(body, "All teams") {
 			t.Errorf("%s does not offer the team filter", path)
@@ -697,10 +697,6 @@ func TestTeamFilterIsOfferedOnBothPages(t *testing.T) {
 				t.Errorf("%s does not list the %q team", path, slug)
 			}
 		}
-	}
-	// The dashboard is deliberately organization-wide.
-	if strings.Contains(ts.get(t, "/?period=12m").Body.String(), "All teams") {
-		t.Error("the dashboard should not advertise a team filter it does not apply")
 	}
 }
 
@@ -805,5 +801,144 @@ func TestStatusPageReportsTeams(t *testing.T) {
 	body := ts.get(t, "/status").Body.String()
 	if !strings.Contains(body, "Teams") {
 		t.Error("the status page does not report the team count")
+	}
+}
+
+func TestOverviewTeamFilterScopesEverySection(t *testing.T) {
+	ts := newTestServer(t)
+
+	// The seed gives platform one member (alice) and the api repository;
+	// design has neither.
+	all := ts.get(t, "/?period=12m").Body.String()
+	platform := ts.get(t, "/?period=12m&team=platform").Body.String()
+	design := ts.get(t, "/?period=12m&team=design").Body.String()
+
+	if !strings.Contains(platform, "team <strong>Platform</strong>") {
+		t.Error("the overview does not state which team it is scoped to")
+	}
+	if !strings.Contains(platform, "Scoped to the") {
+		t.Error("the overview does not explain what the team filter covers")
+	}
+
+	// Alice is the only active contributor and she is on platform, so the
+	// platform view keeps her while design drops her.
+	if !strings.Contains(platform, "@alice") {
+		t.Error("a team member is missing from the scoped overview")
+	}
+	if strings.Contains(design, "@alice") {
+		t.Error("a non-member appears in the design overview")
+	}
+	// The repositories panel follows team repository access.
+	if !strings.Contains(platform, ">api<") {
+		t.Error("the platform overview should list its api repository")
+	}
+
+	if all == platform {
+		t.Error("selecting a team did not change the overview")
+	}
+	if *ts.githubHits != 0 {
+		t.Fatal("filtering the overview by team must not call GitHub")
+	}
+}
+
+func TestOverviewHeadlineNumbersRespectTheTeam(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+
+	// A contributor outside every team, with activity in the period.
+	outsider, err := ts.db.UpsertContributor(ctx, &models.Contributor{
+		GitHubID: "U_out", Login: "outsider", Name: "Outsider",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.db.UpsertCommits(ctx, []models.Commit{{
+		OrganizationID: ts.org.ID, RepositoryID: ts.repoID, ContributorID: &outsider,
+		GitHubOID: "c-outsider", CommittedAt: time.Now().UTC().AddDate(0, 0, -3),
+		Additions: 7, Deletions: 1, ChangedFiles: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.db.RebuildDailyStats(ctx, ts.org.ID, []int64{ts.repoID},
+		time.Now().AddDate(-2, 0, 0), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	f := database.Filter{
+		OrganizationID: ts.org.ID,
+		From:           time.Now().UTC().AddDate(-1, 0, 0),
+		To:             time.Now().UTC(),
+	}
+	orgWide, err := ts.db.Overview(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.TeamID = &ts.teamID
+	scoped, err := ts.db.Overview(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if orgWide.ActiveContributors <= scoped.ActiveContributors {
+		t.Errorf("the team overview counts %d contributors and the organization %d; the filter had no effect",
+			scoped.ActiveContributors, orgWide.ActiveContributors)
+	}
+	if scoped.Commits >= orgWide.Commits {
+		t.Errorf("the team overview counts %d commits, the organization %d", scoped.Commits, orgWide.Commits)
+	}
+	if scoped.Commits == 0 {
+		t.Error("the team overview lost its own member's commits")
+	}
+
+	// Charts and the activity feed follow the same scope.
+	points, err := ts.db.TimeSeries(ctx, f, metrics.GranularityMonth, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var charted int64
+	for _, p := range points {
+		charted += p.Commits
+	}
+	if charted != scoped.Commits {
+		t.Errorf("the chart totals %d commits but the headline says %d", charted, scoped.Commits)
+	}
+
+	activity, err := ts.db.RecentActivity(ctx, f, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range activity {
+		if row.Contributor.Login == "outsider" {
+			t.Error("the activity feed shows a contributor outside the selected team")
+		}
+	}
+}
+
+func TestOverviewTeamFilterSurvivesNavigation(t *testing.T) {
+	ts := newTestServer(t)
+	body := ts.get(t, "/?period=3m&team=platform").Body.String()
+
+	// The period form and the navigation links keep the selection.
+	if !strings.Contains(body, `<input type="hidden" name="team" value="platform">`) {
+		t.Error("the period picker drops the team filter on the overview")
+	}
+	for _, path := range []string{"/contributors", "/repositories"} {
+		if !strings.Contains(body, path+"?period=3m&amp;team=platform") {
+			t.Errorf("the %s link does not carry the team filter", path)
+		}
+	}
+}
+
+func TestUnknownTeamOnTheOverviewDegradesGracefully(t *testing.T) {
+	ts := newTestServer(t)
+	w := ts.get(t, "/?period=12m&team=does-not-exist")
+	if w.Code != http.StatusOK {
+		t.Fatalf("overview with an unknown team = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "All teams") {
+		t.Error("the overview did not fall back to the unfiltered view")
+	}
+	if strings.Contains(w.Body.String(), "Scoped to the") {
+		t.Error("the overview claims a team scope it did not apply")
 	}
 }

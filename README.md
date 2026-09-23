@@ -59,8 +59,8 @@ It provides:
 - **Repository list and detail pages** — contributors, commits, PRs, reviews,
   last activity, archived status. Every column header on the list sorts the
   table; clicking the active column flips the direction.
-- **Team filter** — scope the contributors and repositories pages to a GitHub
-  team.
+- **Team filter** — scope the overview, contributors and repositories pages to a
+  GitHub team.
 - **Status page** — sync health, GraphQL rate limit, stored row counts, run history.
 - **Global date filter** — 7 or 30 days, 3/6/12 months or a custom range, applied
   consistently across every page.
@@ -443,21 +443,28 @@ members and the repositories each team has access to. Membership is mirrored,
 not accumulated — when somebody leaves a team on GitHub they stop being a member
 here on the next synchronization, and a deleted team is removed.
 
-A **team filter** appears on the contributors and repositories pages:
+A **team filter** appears on the overview, contributors and repositories pages:
 
 ```
+/?period=3m&team=platform
 /contributors?team=platform
 /repositories?team=platform&sort=commits&dir=desc
 ```
 
-The two pages scope differently, because they answer different questions:
+The pages scope differently, because they answer different questions. The rule
+is the same everywhere: **contributor-oriented figures follow the team's people,
+repository lists follow the team's repositories.**
 
 | Page | `?team=x` means |
 |---|---|
+| `/` (overview) | Headline figures, charts, the three top-contributor lists and the activity feed cover the members of team *x*. The repositories panel lists the repositories team *x* has access to. |
 | `/contributors` | Only members of team *x*, counting their activity across the **whole** organization. |
 | `/repositories` | Only repositories team *x* has access to, with figures covering **every** contributor, not only team members. |
 
 Each page states which rule it is applying, so the numbers are never ambiguous.
+On the overview this matters for one card in particular: **Active repositories**
+counts the repositories the team's *members* worked in, which is not necessarily
+the same as the number of repositories the team owns.
 The filter is carried through sorting, pagination and date changes, and an
 unknown or deleted slug quietly falls back to the unfiltered view rather than
 breaking a shared link.
@@ -473,8 +480,9 @@ SYNC_TEAMS=false
 
 ### Limitations
 
-- The dashboard and the PDF report are organization-wide; the team filter is not
-  applied to them, and the report link deliberately does not carry a team.
+- The PDF report is organization-wide; the team filter is not applied to it, and
+  the report link deliberately does not carry a team rather than silently
+  ignoring one.
 - Only teams visible to the token are imported. Secret teams the token cannot
   read are invisible to DevPulse.
 - A repository a team can reach that is outside `GITHUB_ORG` is ignored, like

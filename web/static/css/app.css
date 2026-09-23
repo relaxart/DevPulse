@@ -329,3 +329,4 @@ main { flex: 1 0 auto; }
 .team-menu .dropdown-item { white-space: normal; }
 .team-menu-meta { display: block; font-size: .72rem; color: var(--md-text-muted); }
 .team-menu .dropdown-item.active .team-menu-meta { color: rgba(255, 255, 255, .8); }
+.dashboard-note { max-width: 42ch; }

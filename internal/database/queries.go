@@ -95,10 +95,10 @@ SELECT COALESCE(COUNT(DISTINCT s.contributor_id), 0),
        COALESCE(COUNT(DISTINCT s.repository_id), 0)
   FROM contributor_daily_stats s
   JOIN repositories r ON r.id = s.repository_id
-  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL
+  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + teamMemberFilterSQL
 
 	var o models.OverviewStats
-	err := db.Pool.QueryRow(ctx, q, f.args()...).Scan(
+	err := db.Pool.QueryRow(ctx, q, f.contributorArgs()...).Scan(
 		&o.ActiveContributors, &o.Commits, &o.Additions, &o.Deletions,
 		&o.PRsOpened, &o.PRsMerged, &o.Reviews, &o.ActiveRepositories)
 	if err != nil {
@@ -280,7 +280,7 @@ SELECT DISTINCT c.id, c.github_id, c.login, c.name, c.avatar_url, c.url, c.is_bo
 // or one repository, depending on which optional id is supplied.
 func (db *DB) TimeSeries(ctx context.Context, f Filter, g metrics.Granularity, contributorID, repositoryID *int64) ([]models.TimePoint, error) {
 	q := `
-SELECT date_trunc($6, s.date::timestamp)::date AS bucket,
+SELECT date_trunc($7, s.date::timestamp)::date AS bucket,
        COALESCE(SUM(s.commit_count), 0),
        COALESCE(SUM(s.additions), 0),
        COALESCE(SUM(s.deletions), 0),
@@ -289,13 +289,13 @@ SELECT date_trunc($6, s.date::timestamp)::date AS bucket,
        COALESCE(SUM(s.reviews_submitted), 0)
   FROM contributor_daily_stats s
   JOIN repositories r ON r.id = s.repository_id
-  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + `
-     AND ($7::bigint IS NULL OR s.contributor_id = $7)
-     AND ($8::bigint IS NULL OR s.repository_id = $8)
+  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + teamMemberFilterSQL + `
+     AND ($8::bigint IS NULL OR s.contributor_id = $8)
+     AND ($9::bigint IS NULL OR s.repository_id = $9)
  GROUP BY bucket
  ORDER BY bucket`
 
-	args := append(f.args(), string(g), contributorID, repositoryID)
+	args := append(f.contributorArgs(), string(g), contributorID, repositoryID)
 	rows, err := db.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("time series: %w", redact(err))
@@ -578,11 +578,11 @@ SELECT s.date, c.id, c.login, c.name, c.avatar_url, r.name,
        s.commit_count, s.prs_opened, s.prs_merged, s.reviews_submitted, s.additions, s.deletions
   FROM contributor_daily_stats s
   JOIN repositories r ON r.id = s.repository_id
-  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + `
+  JOIN contributors c ON c.id = s.contributor_id` + contributorFilterSQL + teamMemberFilterSQL + `
  ORDER BY s.date DESC, (s.commit_count + s.prs_opened + s.reviews_submitted) DESC
- LIMIT $6`
+ LIMIT $7`
 
-	args := append(f.args(), limit)
+	args := append(f.contributorArgs(), limit)
 	rows, err := db.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recent activity: %w", redact(err))

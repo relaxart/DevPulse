@@ -176,6 +176,8 @@ type dashboardView struct {
 	TopReviewers []models.ContributorStats
 	Repositories []models.RepositoryStats
 	Activity     []models.ActivityRow
+	Teams        []models.Team
+	Team         *models.Team
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +188,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	view := dashboardView{layoutData: pc.Layout}
 	view.Title = "Overview"
 	view.Granularity = string(pc.Layout.Range.Granularity())
+
+	if err := s.resolveTeam(r, pc); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	view.Teams, view.Team = pc.Teams, pc.Team
+	if pc.Team != nil {
+		view.Query = cloneValues(pc.Layout.Range.Query())
+		view.Query.Set("team", pc.Team.Slug)
+	}
 
 	if pc.Org == nil {
 		s.render(w, r, http.StatusOK, "dashboard.html", view)
